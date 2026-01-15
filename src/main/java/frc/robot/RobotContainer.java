@@ -16,6 +16,8 @@ package frc.robot;
 import com.pathplanner.lib.auto.AutoBuilder;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Translation2d;
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj.GenericHID;
 import edu.wpi.first.wpilibj.XboxController;
@@ -27,16 +29,26 @@ import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
 import frc.robot.Constants.fieldConstants;
 import frc.robot.commands.DriveCommands;
 import frc.robot.commands.MegaTrackCommand;
+import frc.robot.commands.TestShootCommand;
 import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.drive.Drive;
 import frc.robot.subsystems.drive.GyroIO;
 import frc.robot.subsystems.drive.GyroIOPigeon2;
 import frc.robot.subsystems.drive.ModuleIO;
 import frc.robot.subsystems.drive.ModuleIOSim;
+import frc.robot.subsystems.drive.ModuleIOTalonFX;
+import frc.robot.subsystems.feeder.Feeder;
+import frc.robot.subsystems.feeder.FeederIO;
+import frc.robot.subsystems.feeder.FeederIOTalonFX;
+import frc.robot.subsystems.intake.Intake;
+import frc.robot.subsystems.intake.IntakeIO;
+import frc.robot.subsystems.intake.IntakeIOTalonFX;
 import frc.robot.subsystems.shooter.Shooter;
 import frc.robot.subsystems.shooter.ShooterIO;
 import frc.robot.subsystems.shooter.ShooterIOTalonFX;
 import frc.robot.util.LoggedTunableNumber;
+import java.util.Set;
+import java.util.function.DoubleSupplier;
 import org.littletonrobotics.junction.networktables.LoggedDashboardChooser;
 
 /**
@@ -50,12 +62,36 @@ public class RobotContainer {
   public final Drive drive;
   private LoggedTunableNumber hoodAngle = new LoggedTunableNumber("Shooter/Hood Angle", 0);
   private LoggedTunableNumber Shooter = new LoggedTunableNumber("Shooter/ShooterVel", 0);
+  private LoggedTunableNumber testDistanceMeters =
+      new LoggedTunableNumber("TestShoot/DistanceMeters", 2.0);
+  private LoggedTunableNumber testFeederVel = new LoggedTunableNumber("TestShoot/FeederVelRPS", 20);
 
   @SuppressWarnings("unused")
   public final Shooter shooter;
 
+  @SuppressWarnings("unused")
+  public final Feeder feeder;
+
+  @SuppressWarnings("unused")
+  public final Intake intake;
+
   // Controller
   private final CommandXboxController controller = new CommandXboxController(0);
+
+  /** Driver X speed supplier (forward/back). */
+  public DoubleSupplier getDriveXSupplier() {
+    return () -> -controller.getLeftY();
+  }
+
+  /** Driver Y speed supplier (left/right). */
+  public DoubleSupplier getDriveYSupplier() {
+    return () -> -controller.getLeftX();
+  }
+
+  /** Right trigger axis supplier in range [0, 1]. */
+  public DoubleSupplier getRightTriggerAxisSupplier() {
+    return () -> controller.getRightTriggerAxis();
+  }
 
   // Dashboard inputs
   private final LoggedDashboardChooser<Command> autoChooser;
@@ -68,11 +104,13 @@ public class RobotContainer {
         drive =
             new Drive(
                 new GyroIOPigeon2(),
-                new ModuleIO() {},
-                new ModuleIO() {},
-                new ModuleIO() {},
-                new ModuleIO() {});
+                new ModuleIOTalonFX(TunerConstants.FrontLeft),
+                new ModuleIOTalonFX(TunerConstants.FrontRight),
+                new ModuleIOTalonFX(TunerConstants.BackLeft),
+                new ModuleIOTalonFX(TunerConstants.BackRight));
         shooter = new Shooter(new ShooterIOTalonFX());
+        feeder = new Feeder(new FeederIOTalonFX());
+        intake = new Intake(new IntakeIOTalonFX());
         break;
 
       case SIM:
@@ -85,6 +123,8 @@ public class RobotContainer {
                 new ModuleIOSim(TunerConstants.BackLeft),
                 new ModuleIOSim(TunerConstants.BackRight));
         shooter = new Shooter(new ShooterIO() {});
+        feeder = new Feeder(new FeederIO() {});
+        intake = new Intake(new IntakeIO() {});
         break;
 
       default:
@@ -97,6 +137,8 @@ public class RobotContainer {
                 new ModuleIO() {},
                 new ModuleIO() {});
         shooter = new Shooter(new ShooterIO() {});
+        feeder = new Feeder(new FeederIO() {});
+        intake = new Intake(new IntakeIO() {});
         break;
     }
 
@@ -137,14 +179,23 @@ public class RobotContainer {
             () -> -controller.getLeftY(),
             () -> -controller.getLeftX(),
             () -> -controller.getRightX()));
+    controller
+        .povUp()
+        .whileTrue(
+            Commands.run(
+                () -> {
+                  drive.runVelocity(new ChassisSpeeds(2, 0, 0));
+                },
+                drive));
 
     // Lock to 0° when A button is held
     controller.a().whileTrue(new InstantCommand(() -> shooter.setVelocity(Shooter.get())));
     controller.x().whileTrue(new InstantCommand(() -> shooter.setHoodAngle(hoodAngle.get())));
-    controller.b().onTrue(new InstantCommand(() -> shooter.setVelocity(0)));
 
     // Switch to X pattern when X button is pressed
     controller.x().onTrue(Commands.runOnce(drive::stopWithX, drive));
+    controller.leftBumper().onTrue(new InstantCommand(() -> intake.setVoltage(10)));
+    controller.leftBumper().onFalse(new InstantCommand(() -> intake.setVoltage(0)));
 
     // Reset gyro to 0° when B button is pressed
     controller
@@ -153,13 +204,24 @@ public class RobotContainer {
             Commands.runOnce(
                     () ->
                         drive.setPose(
-                            new Pose2d(drive.getPose().getTranslation(), new Rotation2d())),
+                            new Pose2d(new Translation2d(3.223, 4.030), new Rotation2d())),
                     drive)
                 .ignoringDisable(true));
 
     controller
         .rightBumper()
         .whileTrue(new MegaTrackCommand(this, fieldConstants.getHubLocation(Alliance.Blue)));
+
+    // Hold Y to spin up shooter + aim hood, and press right trigger to run feeder
+    controller
+        .y()
+        .whileTrue(
+            Commands.defer(
+                () -> {
+                  return new TestShootCommand(
+                      this, () -> testDistanceMeters.get(), testFeederVel.get(), 0.25);
+                },
+                Set.of(shooter)));
   }
 
   /**

@@ -43,6 +43,7 @@ import edu.wpi.first.wpilibj.Alert;
 import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
+import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
@@ -50,12 +51,25 @@ import frc.robot.Constants;
 import frc.robot.Constants.Mode;
 import frc.robot.generated.TunerConstants;
 import frc.robot.util.LocalADStarAK;
+import frc.robot.util.swerve.ModuleLimits;
+import frc.robot.util.swerve.SwerveSetpoint;
+import frc.robot.util.swerve.SwerveSetpointGenerator;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import org.littletonrobotics.junction.AutoLogOutput;
 import org.littletonrobotics.junction.Logger;
 
 public class Drive extends SubsystemBase {
+  // --- Setpoint generation (steering vel + drive accel limiting) ---
+
+  private static final double DEFAULT_MAX_DRIVE_ACCEL_MPS2 = 100;
+  private static final double DEFAULT_MAX_STEER_VEL_RAD_PER_SEC = 100.0;
+  private final SwerveSetpointGenerator setpointGenerator =
+      new SwerveSetpointGenerator(
+          new SwerveDriveKinematics(getModuleTranslations()), getModuleTranslations());
+  private SwerveSetpoint prevSetpoint = null;
+  private double lastSetpointTimestampSec = Double.NaN;
+
   // TunerConstants doesn't include these constants, so they are declared locally
   static final double ODOMETRY_FREQUENCY =
       new CANBus(TunerConstants.DrivetrainConstants.CANBusName).isNetworkFD() ? 250.0 : 100.0;
@@ -67,6 +81,13 @@ public class Drive extends SubsystemBase {
           Math.max(
               Math.hypot(TunerConstants.BackLeft.LocationX, TunerConstants.BackLeft.LocationY),
               Math.hypot(TunerConstants.BackRight.LocationX, TunerConstants.BackRight.LocationY)));
+  // --- Field-relative acceleration estimation ---
+  private double lastAccelTimestampSec = Double.NaN;
+  private Translation2d lastFieldVel = new Translation2d();
+  private Translation2d fieldAccelFiltered = new Translation2d();
+
+  // Tune this: lower = more smoothing (slower response), higher = less smoothing (noisier)
+  private static final double ACCEL_CUTOFF_HZ = 12.0; // 8~20Hz 常见
 
   // PathPlanner config constants
   private static final double ROBOT_MASS_KG = 74.088;
@@ -158,9 +179,69 @@ public class Drive extends SubsystemBase {
                 (voltage) -> runCharacterization(voltage.in(Volts)), null, this));
   }
 
+  private void updateFieldAccelerationEstimate() {
+    // Use FPGA timestamp to match WPILib timing
+    double now = edu.wpi.first.wpilibj.Timer.getFPGATimestamp();
+
+    ChassisSpeeds vField = getFieldRelativeSpeeds();
+    Translation2d fieldVelNow =
+        new Translation2d(vField.vxMetersPerSecond, vField.vyMetersPerSecond);
+
+    if (Double.isNaN(lastAccelTimestampSec)) {
+      // First sample: initialize
+      lastAccelTimestampSec = now;
+      lastFieldVel = fieldVelNow;
+      fieldAccelFiltered = new Translation2d();
+      return;
+    }
+
+    double dt = now - lastAccelTimestampSec;
+    // Guard against weird dt (e.g., sim hiccups)
+    if (dt <= 1e-4 || dt > 0.1) {
+      lastAccelTimestampSec = now;
+      lastFieldVel = fieldVelNow;
+      // Do not update accel on bad dt
+      return;
+    }
+
+    // Raw acceleration from finite difference
+    Translation2d accelRaw = fieldVelNow.minus(lastFieldVel).div(dt);
+
+    // First-order low-pass filter (exponential smoothing)
+    double alpha = lowPassAlpha(ACCEL_CUTOFF_HZ, dt);
+    fieldAccelFiltered =
+        new Translation2d(
+            fieldAccelFiltered.getX() + alpha * (accelRaw.getX() - fieldAccelFiltered.getX()),
+            fieldAccelFiltered.getY() + alpha * (accelRaw.getY() - fieldAccelFiltered.getY()));
+
+    lastAccelTimestampSec = now;
+    lastFieldVel = fieldVelNow;
+
+    // Optional logs to AdvantageKit
+    Logger.recordOutput("Drive/FieldVel", fieldVelNow);
+    Logger.recordOutput("Drive/FieldAccelRaw", accelRaw);
+    Logger.recordOutput("Drive/FieldAccelFiltered", fieldAccelFiltered);
+  }
+
+  private static double lowPassAlpha(double cutoffHz, double dt) {
+    // alpha = 1 - exp(-2*pi*fc*dt)
+    double x = -2.0 * Math.PI * cutoffHz * dt;
+    return 1.0 - Math.exp(x);
+  }
+  /** Returns filtered field-relative linear acceleration (m/s^2). */
+  public Translation2d getFieldRelativeAcceleration() {
+    return fieldAccelFiltered;
+  }
+
+  @AutoLogOutput(key = "SwerveChassisAccel/MeasuredFieldOriented")
+  public ChassisSpeeds getLoggedFieldRelativeAcceleration() {
+    return new ChassisSpeeds(fieldAccelFiltered.getX(), fieldAccelFiltered.getY(), 0);
+  }
+
   @Override
   public void periodic() {
     odometryLock.lock(); // Prevents odometry updates while reading data
+
     gyroIO.updateInputs(gyroInputs);
     Logger.processInputs("Drive/Gyro", gyroInputs);
     for (var module : modules) {
@@ -212,6 +293,7 @@ public class Drive extends SubsystemBase {
       // Apply update
       poseEstimator.updateWithTime(sampleTimestamps[i], rawGyroRotation, modulePositions);
     }
+    updateFieldAccelerationEstimate();
 
     // Update gyro alert
     gyroDisconnectedAlert.set(!gyroInputs.connected && Constants.currentMode != Mode.SIM);
@@ -223,14 +305,37 @@ public class Drive extends SubsystemBase {
    * @param speeds Speeds in meters/sec
    */
   public void runVelocity(ChassisSpeeds speeds) {
-    // Calculate module setpoints
-    ChassisSpeeds discreteSpeeds = ChassisSpeeds.discretize(speeds, 0.02);
-    SwerveModuleState[] setpointStates = kinematics.toSwerveModuleStates(discreteSpeeds);
-    SwerveDriveKinematics.desaturateWheelSpeeds(setpointStates, TunerConstants.kSpeedAt12Volts);
+    // Estimate dt for setpoint limiting
+    double now = Timer.getFPGATimestamp();
+    double dt = Double.isNaN(lastSetpointTimestampSec) ? 0.02 : (now - lastSetpointTimestampSec);
+    lastSetpointTimestampSec = now;
+    // Guard against weird dt (sim hiccups / first cycle)
+    if (dt <= 1e-4 || dt > 0.1) {
+      dt = 0.02;
+    }
+
+    // Initialize previous setpoint from measured state (avoids startup discontinuities)
+    if (prevSetpoint == null) {
+      prevSetpoint = new SwerveSetpoint(getChassisSpeeds(), getModuleStates());
+    }
+
+    // Apply setpoint generator limits (robot-relative)
+    double maxVel = getMaxLinearSpeedMetersPerSec();
+    ModuleLimits limits =
+        new ModuleLimits(maxVel, DEFAULT_MAX_DRIVE_ACCEL_MPS2, DEFAULT_MAX_STEER_VEL_RAD_PER_SEC);
+
+    // Discretize desired speeds first for consistency with standard swerve control
+    ChassisSpeeds discreteSpeeds = ChassisSpeeds.discretize(speeds, dt);
+    SwerveSetpoint generated =
+        setpointGenerator.generateSetpoint(limits, prevSetpoint, discreteSpeeds, dt);
+    SwerveModuleState[] setpointStates = generated.moduleStates();
+
+    // Enforce global wheel speed limit
+    SwerveDriveKinematics.desaturateWheelSpeeds(setpointStates, maxVel);
 
     // Log unoptimized setpoints and setpoint speeds
     Logger.recordOutput("SwerveStates/Setpoints", setpointStates);
-    Logger.recordOutput("SwerveChassisSpeeds/Setpoints", discreteSpeeds);
+    Logger.recordOutput("SwerveChassisSpeeds/Setpoints", generated.chassisSpeeds());
 
     // Send setpoints to modules
     for (int i = 0; i < 4; i++) {
@@ -239,6 +344,9 @@ public class Drive extends SubsystemBase {
 
     // Log optimized setpoints (runSetpoint mutates each state)
     Logger.recordOutput("SwerveStates/SetpointsOptimized", setpointStates);
+
+    // Save the applied setpoint as the next previous setpoint (after optimization/flips)
+    prevSetpoint = new SwerveSetpoint(generated.chassisSpeeds(), setpointStates);
   }
 
   /** Runs the drive in a straight line with the specified drive output. */

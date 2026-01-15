@@ -37,15 +37,15 @@ public class ModuleIOSim implements ModuleIO {
   private static final double DRIVE_KV_ROT =
       0.91035; // Same units as TunerConstants: (volt * secs) / rotation
   private static final double DRIVE_KV = 1.0 / Units.rotationsToRadians(1.0 / DRIVE_KV_ROT);
-  private static final double TURN_KP = 8.0;
-  private static final double TURN_KD = 0.0;
+  private static final double TURN_KP = 16.0;
+  private static final double TURN_KD = 0.;
   private static final DCMotor DRIVE_GEARBOX = DCMotor.getKrakenX60Foc(1);
   private static final DCMotor TURN_GEARBOX = DCMotor.getKrakenX60Foc(1);
 
   private final DCMotorSim driveSim;
   private final DCMotorSim turnSim;
 
-  private boolean driveClosedLoop = false;
+  private boolean driveClosedLoop = true;
   private boolean turnClosedLoop = false;
   private PIDController driveController = new PIDController(DRIVE_KP, 0, DRIVE_KD);
   private PIDController turnController = new PIDController(TURN_KP, 0, TURN_KD);
@@ -89,6 +89,7 @@ public class ModuleIOSim implements ModuleIO {
 
     // Update simulation state
     driveSim.setInputVoltage(MathUtil.clamp(driveAppliedVolts, -12.0, 12.0));
+
     turnSim.setInputVoltage(MathUtil.clamp(turnAppliedVolts, -12.0, 12.0));
     driveSim.update(0.02);
     turnSim.update(0.02);

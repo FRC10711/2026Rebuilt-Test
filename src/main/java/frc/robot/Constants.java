@@ -13,6 +13,7 @@
 
 package frc.robot;
 
+import com.ctre.phoenix6.signals.MotorAlignmentValue;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.interpolation.InterpolatingDoubleTreeMap;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
@@ -38,16 +39,15 @@ public final class Constants {
     REPLAY
   }
 
-  /** Intake CAN IDs and sensor IDs. Update these to match your robot wiring. */
+  /** Intake CAN IDs and tuning. Update these to match your robot wiring. */
   public static final class intakeConstants {
-    public static final int LEFT_MOTOR_ID = 0;
-    public static final int MIDDLE_MOTOR_ID = 0;
-    public static final int RIGHT_MOTOR_ID = 0;
+    // CAN IDs
+    public static final int LEADER_MOTOR_ID = 50;
+    public static final int FOLLOWER_MOTOR_ID = 19;
 
-    public static final int CANRANGE_TL_ID = 0;
-    public static final int CANRANGE_TM_ID = 0;
-    public static final int CANRANGE_TR_ID = 0;
-    public static final int CANRANGE_BM_ID = 0;
+    // Motor directions
+    public static final boolean LEADER_INVERTED = false;
+    public static final boolean FOLLOWER_INVERTED = true;
 
     private intakeConstants() {}
   }
@@ -67,29 +67,40 @@ public final class Constants {
     public static final double FlyTime = 0.9;
     public static InterpolatingDoubleTreeMap hoodAngleMap = new InterpolatingDoubleTreeMap();
     public static InterpolatingDoubleTreeMap shooterSpeedMap = new InterpolatingDoubleTreeMap();
+    public static final double MAX_SHOOTING_VELOCITY = 3;
 
     static {
-      hoodAngleMap.put(0.0, 0.0);
-      hoodAngleMap.put(0.506, 5.0);
-      hoodAngleMap.put(1.02, 10.0);
-      hoodAngleMap.put(1.550, 15.0);
-      hoodAngleMap.put(2.106, 20.0);
-      hoodAngleMap.put(2.70, 25.);
-      hoodAngleMap.put(3.34, 30.0);
-      hoodAngleMap.put(4.05, 35.0);
-      hoodAngleMap.put(4.85, 40.0);
-      hoodAngleMap.put(5.787, 45.);
+      // hoodAngleMap.put(0.0, 0.0);
+      // hoodAngleMap.put(0.506, 5.0);
+      // hoodAngleMap.put(1.02, 10.0);
+      // hoodAngleMap.put(1.550, 15.0);
+      // hoodAngleMap.put(2.106, 20.0);
+      // hoodAngleMap.put(2.70, 25.);
+      // hoodAngleMap.put(3.34, 30.0);
+      // hoodAngleMap.put(4.05, 35.0);
+      // hoodAngleMap.put(4.85, 40.0);
+      // hoodAngleMap.put(5.787, 45.);
+      hoodAngleMap.put(1.65, 1.);
+      hoodAngleMap.put(2.18, 5.);
+      hoodAngleMap.put(2.76, 11.);
+      hoodAngleMap.put(3.42, 16.);
+      hoodAngleMap.put(4.07, 18.);
+      shooterSpeedMap.put(1.65, 29.7);
+      shooterSpeedMap.put(2.18, 32.);
+      shooterSpeedMap.put(2.76, 34.);
+      shooterSpeedMap.put(3.42, 35.5);
+      hoodAngleMap.put(4.07, 37.);
 
-      shooterSpeedMap.put(0.0, 54.48);
-      shooterSpeedMap.put(0.506, 54.69);
-      shooterSpeedMap.put(1.02, 55.32);
-      shooterSpeedMap.put(1.550, 56.40);
-      shooterSpeedMap.put(2.106, 57.98);
-      shooterSpeedMap.put(2.70, 60.117);
-      shooterSpeedMap.put(3.34, 62.913);
-      shooterSpeedMap.put(4.05, 66.513);
-      shooterSpeedMap.put(4.85, 71.125);
-      shooterSpeedMap.put(5.787, 77.053);
+      // shooterSpeedMap.put(0.0, 54.48);
+      // shooterSpeedMap.put(0.506, 54.69);
+      // shooterSpeedMap.put(1.02, 55.32);
+      // shooterSpeedMap.put(1.550, 56.40);
+      // shooterSpeedMap.put(2.106, 57.98);
+      // shooterSpeedMap.put(2.70, 60.117);
+      // shooterSpeedMap.put(3.34, 62.913);
+      // shooterSpeedMap.put(4.05, 66.513);
+      // shooterSpeedMap.put(4.85, 71.125);
+      // shooterSpeedMap.put(5.787, 77.053);
     }
   }
   /** Shooter CAN IDs and tuning. Update these to match your robot wiring & tuning. */
@@ -102,18 +113,25 @@ public final class Constants {
     // Motor directions
     public static final boolean FLYWHEEL_LEADER_INVERTED = false;
 
-    public static final boolean FLYWHEEL_FOLLOWER_INVERTED = true;
+    public static final MotorAlignmentValue FLYWHEEL_FOLLOWER_INVERTED =
+        MotorAlignmentValue.Opposed;
     public static final boolean HOOD_INVERTED = true;
 
     // Gear ratios (motor rotations per mechanism rotation)
     public static final double FLYWHEEL_SENSOR_TO_MECH_RATIO = 1.0;
     public static final double HOOD_SENSOR_TO_MECH_RATIO = 31.875;
 
+    /** Flywheel/exit location relative to robot center (meters). +X forward, +Y left. */
+    public static final double FLYWHEEL_OFFSET_X_METERS = 0.18;
+
+    public static final double FLYWHEEL_OFFSET_Y_METERS = 0.0;
+
     // Flywheel closed-loop gains (Phoenix Slot0)
-    public static final double FLYWHEEL_KP = 0.1;
+    public static final double FLYWHEEL_KP = 7;
     public static final double FLYWHEEL_KI = 0.0;
     public static final double FLYWHEEL_KD = 0.0;
-    public static final double FLYWHEEL_KV = 0.12;
+    public static final double FLYWHEEL_KV = 0.0;
+    public static final double FLYWHEEL_KS = 3.5;
 
     // Hood Motion Magic (mechanism rotations/sec and rotations/sec^2)
     public static final double HOOD_MM_CRUISE_VELOCITY = 0.5;
@@ -121,13 +139,48 @@ public final class Constants {
     public static final double HOOD_MM_JERK = 0.0;
 
     // Hood closed-loop gains (Phoenix Slot0)
-    public static final double HOOD_KP = 100;
+    public static final double HOOD_KP = 2300;
     public static final double HOOD_KI = 0.0;
-    public static final double HOOD_KD = 0.0;
+    public static final double HOOD_KD = 230.0;
     public static final double HOOD_KS = 0.0;
+    public static final double HOOD_KG = 2.0;
     public static final double HOOD_KV = 0.0;
     public static final double HOOD_KA = 0.0;
 
     private shooterConstants() {}
+  }
+
+  /**
+   * Drivetrain torque-current deadband tuning (applies when
+   * DriveMotorClosedLoopOutput=TorqueCurrentFOC).
+   */
+  public static final class drivetrainConstants {
+    /**
+     * Deadband for torque-current requests (same units as {@code TorqueCurrentFOC.withOutput},
+     * amps).
+     */
+    public static final double TORQUE_CURRENT_DEADBAND_AMPS = 0.0;
+
+    private drivetrainConstants() {}
+  }
+
+  /** Feeder CAN IDs and tuning. Update these to match your robot wiring & tuning. */
+  public static final class feederConstants {
+    // CAN IDs
+    public static final int MOTOR_ID = 21;
+
+    // Motor direction
+    public static final boolean INVERTED = false;
+
+    // Gear ratio (motor rotations per mechanism rotation)
+    public static final double SENSOR_TO_MECH_RATIO = 1.0;
+
+    // Velocity closed-loop gains (Phoenix Slot0)
+    public static final double KP = 10.0;
+    public static final double KI = 0.0;
+    public static final double KD = 0.0;
+    public static final double KV = 0.;
+
+    private feederConstants() {}
   }
 }
