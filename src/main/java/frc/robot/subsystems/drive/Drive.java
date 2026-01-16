@@ -27,6 +27,7 @@ import edu.wpi.first.hal.FRCNetComm.tInstances;
 import edu.wpi.first.hal.FRCNetComm.tResourceType;
 import edu.wpi.first.hal.HAL;
 import edu.wpi.first.math.Matrix;
+import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.estimator.SwerveDrivePoseEstimator;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -50,6 +51,7 @@ import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
 import frc.robot.Constants;
 import frc.robot.Constants.Mode;
 import frc.robot.generated.TunerConstants;
+import frc.robot.util.LimelightHelpers;
 import frc.robot.util.LocalADStarAK;
 import frc.robot.util.swerve.ModuleLimits;
 import frc.robot.util.swerve.SwerveSetpoint;
@@ -223,6 +225,42 @@ public class Drive extends SubsystemBase {
     Logger.recordOutput("Drive/FieldAccelFiltered", fieldAccelFiltered);
   }
 
+  /** Applies a Limelight MegaTag2 pose update (translation only; heading not corrected). */
+  private void updatePoseWithLimelightMegaTag2() {
+    final String llName = "limelight";
+
+    // Provide robot orientation to Limelight for MegaTag2 filtering.
+    double yawDeg = getRotation().getDegrees();
+    double yawRateDegPerSec = Math.toDegrees(getChassisSpeeds().omegaRadiansPerSecond);
+    LimelightHelpers.SetRobotOrientation(llName, yawDeg, yawRateDegPerSec, 0.0, 0.0, 0.0, 0.0);
+
+    // Get MegaTag2 pose estimate (WPILib Blue coordinate system).
+    LimelightHelpers.PoseEstimate est =
+        LimelightHelpers.getBotPoseEstimate_wpiBlue_MegaTag2(llName);
+    if (est == null || est.tagCount <= 0) {
+      return;
+    }
+
+    // Translation std dev based on TA -> dev interpolation.
+    double ta = LimelightHelpers.getTA(llName);
+    double xyStdDev =
+        Math.max(0.05, Constants.visionConstants.taToXYStdDevMeters.get(Math.max(0.0, ta)));
+
+    // Heading should not be corrected: force rotation to current heading and give huge theta std
+    // dev.
+    Pose2d visionPoseNoHeading = new Pose2d(est.pose.getTranslation(), getRotation());
+
+    addVisionMeasurement(
+        visionPoseNoHeading,
+        est.timestampSeconds,
+        VecBuilder.fill(xyStdDev, xyStdDev, Constants.visionConstants.thetaStdDevRad));
+
+    Logger.recordOutput("Vision/Limelight/TA", ta);
+    Logger.recordOutput("Vision/Limelight/XYStdDev", xyStdDev);
+    Logger.recordOutput("Vision/Limelight/TagCount", est.tagCount);
+    Logger.recordOutput("Vision/Limelight/Pose", visionPoseNoHeading);
+  }
+
   private static double lowPassAlpha(double cutoffHz, double dt) {
     // alpha = 1 - exp(-2*pi*fc*dt)
     double x = -2.0 * Math.PI * cutoffHz * dt;
@@ -294,6 +332,7 @@ public class Drive extends SubsystemBase {
       poseEstimator.updateWithTime(sampleTimestamps[i], rawGyroRotation, modulePositions);
     }
     updateFieldAccelerationEstimate();
+    updatePoseWithLimelightMegaTag2();
 
     // Update gyro alert
     gyroDisconnectedAlert.set(!gyroInputs.connected && Constants.currentMode != Mode.SIM);

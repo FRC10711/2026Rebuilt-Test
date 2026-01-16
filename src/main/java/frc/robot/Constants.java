@@ -63,6 +63,32 @@ public final class Constants {
     }
   }
 
+  /** Vision tuning for Limelight MegaTag2 pose updates. */
+  public static final class visionConstants {
+    /** TA->XY std dev map (meters). Tune these points based on your camera mounting & lighting. */
+    public static final InterpolatingDoubleTreeMap taToXYStdDevMeters =
+        new InterpolatingDoubleTreeMap();
+
+    /**
+     * Theta std dev (radians). Use a huge value to effectively ignore vision heading correction.
+     * (We also override the vision measurement rotation to the current gyro heading.)
+     */
+    public static final double thetaStdDevRad = 1.0e6;
+
+    static {
+      // Placeholder tuning points (TA is % of image, 0-100). Adjust to your robot.
+      // Larger TA (bigger tag) => lower std dev (more trust)
+      taToXYStdDevMeters.put(0.17, 0.08);
+      taToXYStdDevMeters.put(0.22, 0.20);
+      taToXYStdDevMeters.put(0.071, 0.35);
+      taToXYStdDevMeters.put(0.046, 0.4);
+      taToXYStdDevMeters.put(0.03, 0.7);
+      taToXYStdDevMeters.put(0.01, 1.);
+    }
+
+    private visionConstants() {}
+  }
+
   public static final class AutoShootConstants {
     public static final double FlyTime = 0.9;
     public static InterpolatingDoubleTreeMap hoodAngleMap = new InterpolatingDoubleTreeMap();
@@ -80,16 +106,16 @@ public final class Constants {
       // hoodAngleMap.put(4.05, 35.0);
       // hoodAngleMap.put(4.85, 40.0);
       // hoodAngleMap.put(5.787, 45.);
-      hoodAngleMap.put(1.65, 1.);
-      hoodAngleMap.put(2.18, 5.);
-      hoodAngleMap.put(2.76, 11.);
-      hoodAngleMap.put(3.42, 16.);
-      hoodAngleMap.put(4.07, 18.);
-      shooterSpeedMap.put(1.65, 29.7);
-      shooterSpeedMap.put(2.18, 32.);
-      shooterSpeedMap.put(2.76, 34.);
-      shooterSpeedMap.put(3.42, 35.5);
-      hoodAngleMap.put(4.07, 37.);
+      hoodAngleMap.put(2.02, 3.2);
+      hoodAngleMap.put(2.65, 6.);
+      hoodAngleMap.put(3.42, 9.);
+      hoodAngleMap.put(4.08, 18.);
+      hoodAngleMap.put(5.05, 18.);
+      shooterSpeedMap.put(2.02, 33.5);
+      shooterSpeedMap.put(2.65, 35.);
+      shooterSpeedMap.put(3.42, 37.);
+      shooterSpeedMap.put(4.08, 37.);
+      shooterSpeedMap.put(5.05, 45.8);
 
       // shooterSpeedMap.put(0.0, 54.48);
       // shooterSpeedMap.put(0.506, 54.69);
@@ -122,12 +148,12 @@ public final class Constants {
     public static final double HOOD_SENSOR_TO_MECH_RATIO = 31.875;
 
     /** Flywheel/exit location relative to robot center (meters). +X forward, +Y left. */
-    public static final double FLYWHEEL_OFFSET_X_METERS = 0.18;
+    public static final double FLYWHEEL_OFFSET_X_METERS = 0.1;
 
     public static final double FLYWHEEL_OFFSET_Y_METERS = 0.0;
 
     // Flywheel closed-loop gains (Phoenix Slot0)
-    public static final double FLYWHEEL_KP = 7;
+    public static final double FLYWHEEL_KP = 6;
     public static final double FLYWHEEL_KI = 0.0;
     public static final double FLYWHEEL_KD = 0.0;
     public static final double FLYWHEEL_KV = 0.0;
@@ -135,7 +161,7 @@ public final class Constants {
 
     // Hood Motion Magic (mechanism rotations/sec and rotations/sec^2)
     public static final double HOOD_MM_CRUISE_VELOCITY = 0.5;
-    public static final double HOOD_MM_ACCELERATION = 2.0;
+    public static final double HOOD_MM_ACCELERATION = 1.0;
     public static final double HOOD_MM_JERK = 0.0;
 
     // Hood closed-loop gains (Phoenix Slot0)
@@ -168,9 +194,12 @@ public final class Constants {
   public static final class feederConstants {
     // CAN IDs
     public static final int MOTOR_ID = 21;
+    public static final int FOLLOWER_MOTOR_ID = 34;
 
     // Motor direction
     public static final boolean INVERTED = false;
+    /** Feeder follower alignment relative to leader. Use Opposed to run opposite direction. */
+    public static final MotorAlignmentValue FOLLOWER_ALIGNMENT = MotorAlignmentValue.Opposed;
 
     // Gear ratio (motor rotations per mechanism rotation)
     public static final double SENSOR_TO_MECH_RATIO = 1.0;
@@ -180,7 +209,16 @@ public final class Constants {
     public static final double KI = 0.0;
     public static final double KD = 0.0;
     public static final double KV = 0.;
+    public static final double KS = 5;
 
     private feederConstants() {}
+  }
+
+  /** Indexer CAN IDs and tuning. Update these to match your robot wiring & tuning. */
+  public static final class indexerConstants {
+    public static final int MOTOR_ID = 35;
+    public static final boolean INVERTED = false;
+
+    private indexerConstants() {}
   }
 }

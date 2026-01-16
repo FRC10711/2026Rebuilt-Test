@@ -40,6 +40,9 @@ import frc.robot.subsystems.drive.ModuleIOTalonFX;
 import frc.robot.subsystems.feeder.Feeder;
 import frc.robot.subsystems.feeder.FeederIO;
 import frc.robot.subsystems.feeder.FeederIOTalonFX;
+import frc.robot.subsystems.indexer.Indexer;
+import frc.robot.subsystems.indexer.IndexerIO;
+import frc.robot.subsystems.indexer.IndexerIOTalonFX;
 import frc.robot.subsystems.intake.Intake;
 import frc.robot.subsystems.intake.IntakeIO;
 import frc.robot.subsystems.intake.IntakeIOTalonFX;
@@ -62,9 +65,13 @@ public class RobotContainer {
   public final Drive drive;
   private LoggedTunableNumber hoodAngle = new LoggedTunableNumber("Shooter/Hood Angle", 0);
   private LoggedTunableNumber Shooter = new LoggedTunableNumber("Shooter/ShooterVel", 0);
-  private LoggedTunableNumber testDistanceMeters =
-      new LoggedTunableNumber("TestShoot/DistanceMeters", 2.0);
+  private LoggedTunableNumber testShooterVel =
+      new LoggedTunableNumber("TestShoot/ShooterVelRPS", 30.0);
+  private LoggedTunableNumber testHoodAngle =
+      new LoggedTunableNumber("TestShoot/HoodAngleDeg", 6.0);
   private LoggedTunableNumber testFeederVel = new LoggedTunableNumber("TestShoot/FeederVelRPS", 20);
+  private LoggedTunableNumber testIndexerVolts =
+      new LoggedTunableNumber("TestShoot/IndexerVolts", 10.0);
 
   @SuppressWarnings("unused")
   public final Shooter shooter;
@@ -74,6 +81,9 @@ public class RobotContainer {
 
   @SuppressWarnings("unused")
   public final Intake intake;
+
+  @SuppressWarnings("unused")
+  public final Indexer indexer;
 
   // Controller
   private final CommandXboxController controller = new CommandXboxController(0);
@@ -111,6 +121,7 @@ public class RobotContainer {
         shooter = new Shooter(new ShooterIOTalonFX());
         feeder = new Feeder(new FeederIOTalonFX());
         intake = new Intake(new IntakeIOTalonFX());
+        indexer = new Indexer(new IndexerIOTalonFX());
         break;
 
       case SIM:
@@ -125,6 +136,7 @@ public class RobotContainer {
         shooter = new Shooter(new ShooterIO() {});
         feeder = new Feeder(new FeederIO() {});
         intake = new Intake(new IntakeIO() {});
+        indexer = new Indexer(new IndexerIO() {});
         break;
 
       default:
@@ -139,6 +151,7 @@ public class RobotContainer {
         shooter = new Shooter(new ShooterIO() {});
         feeder = new Feeder(new FeederIO() {});
         intake = new Intake(new IntakeIO() {});
+        indexer = new Indexer(new IndexerIO() {});
         break;
     }
 
@@ -219,9 +232,14 @@ public class RobotContainer {
             Commands.defer(
                 () -> {
                   return new TestShootCommand(
-                      this, () -> testDistanceMeters.get(), testFeederVel.get(), 0.25);
+                      this,
+                      () -> testShooterVel.get(),
+                      () -> testHoodAngle.get(),
+                      testFeederVel.get(),
+                      testIndexerVolts.get(),
+                      0.25);
                 },
-                Set.of(shooter)));
+                Set.of(shooter, feeder, indexer)));
   }
 
   /**

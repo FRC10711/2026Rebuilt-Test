@@ -17,7 +17,7 @@ import org.littletonrobotics.junction.Logger;
 public class MegaTrackCommand extends Command {
   private static final double HEADING_KP = 6.0;
   private static final double HEADING_KI = 0.0;
-  private static final double HEADING_KD = 0.1;
+  private static final double HEADING_KD = 0.;
 
   /** Scale for shooter acceleration feedforward computed from slope*dDot. */
   private static final double SHOOTER_ACCEL_FF_GAIN = 1.0;
@@ -30,11 +30,11 @@ public class MegaTrackCommand extends Command {
   private static final double HEADING_HOLD_MIN_DIST_METERS = 0.9;
   private static final double HEADING_HOLD_MAX_DIST_METERS = 5.6;
 
-  private static final double FLYWHEEL_RPS_TOL = 1.5;
-  private static final double HOOD_DEG_TOL = 1.0;
+  private static final double FLYWHEEL_RPS_TOL = 1;
+  private static final double HOOD_DEG_TOL = 1.;
   private static final double HEADING_TOL_RAD = Math.toRadians(2.0);
 
-  private static final double FEEDER_RPS = 20.0;
+  private static final double FEEDER_RPS = 30.0;
 
   private final RobotContainer robotContainer;
   private final frc.robot.subsystems.drive.Drive drive;
@@ -65,7 +65,7 @@ public class MegaTrackCommand extends Command {
     this.ySupplier = robotContainer.getDriveYSupplier();
     this.targetTranslation = targetTranslation;
     headingController.enableContinuousInput(-Math.PI, Math.PI);
-    addRequirements(drive, robotContainer.shooter, robotContainer.feeder);
+    addRequirements(drive, robotContainer.shooter, robotContainer.feeder, robotContainer.indexer);
   }
 
   @Override
@@ -262,8 +262,8 @@ public class MegaTrackCommand extends Command {
     Logger.recordOutput("AutoShoot/ShooterAccelFFRpsPerSec", shooterAccelFfRpsPerSec);
     Logger.recordOutput("AutoShoot/ShooterAccelFFGain", SHOOTER_ACCEL_FF_GAIN);
 
-    double hoodAngle = hoodBase;
-    double shooterSpeed = shooterBase;
+    double hoodAngle = hoodBase + 1;
+    double shooterSpeed = shooterBase + 1;
 
     Logger.recordOutput("AutoShoot/Distance", d);
     Logger.recordOutput("AutoShoot/HoodBase", hoodBase);
@@ -298,7 +298,8 @@ public class MegaTrackCommand extends Command {
     if (readyToShoot) {
       robotContainer.feeder.setVelocity(FEEDER_RPS);
     } else {
-      robotContainer.feeder.stop();
+      // robotContainer.feeder.stop();
+      robotContainer.indexer.stop();
     }
 
     // Log suggested shooter parameters (for dashboards/other commands to consume)
@@ -319,5 +320,6 @@ public class MegaTrackCommand extends Command {
     drive.stop();
     robotContainer.shooter.stop();
     robotContainer.feeder.stop();
+    robotContainer.indexer.stop();
   }
 }

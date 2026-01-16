@@ -5,6 +5,7 @@ import com.ctre.phoenix6.BaseStatusSignal;
 import com.ctre.phoenix6.StatusSignal;
 import com.ctre.phoenix6.configs.Slot0Configs;
 import com.ctre.phoenix6.configs.TalonFXConfiguration;
+import com.ctre.phoenix6.controls.Follower;
 import com.ctre.phoenix6.controls.VelocityTorqueCurrentFOC;
 import com.ctre.phoenix6.hardware.TalonFX;
 import com.ctre.phoenix6.signals.InvertedValue;
@@ -17,10 +18,12 @@ import frc.robot.Constants;
 
 public class FeederIOTalonFX implements FeederIO {
   private final TalonFX motor;
+  private final TalonFX followerMotor;
 
   // Control request
   private final VelocityTorqueCurrentFOC velocityTorqueCurrentReq =
       new VelocityTorqueCurrentFOC(0.0);
+  private final Follower followerReq;
 
   // Signals
   private final StatusSignal<AngularVelocity> velocity;
@@ -29,6 +32,7 @@ public class FeederIOTalonFX implements FeederIO {
 
   public FeederIOTalonFX() {
     motor = new TalonFX(Constants.feederConstants.MOTOR_ID);
+    followerMotor = new TalonFX(Constants.feederConstants.FOLLOWER_MOTOR_ID);
 
     var cfg = new TalonFXConfiguration();
     cfg.MotorOutput.NeutralMode = NeutralModeValue.Coast;
@@ -42,13 +46,25 @@ public class FeederIOTalonFX implements FeederIO {
             .withKP(Constants.feederConstants.KP)
             .withKI(Constants.feederConstants.KI)
             .withKD(Constants.feederConstants.KD)
-            .withKV(Constants.feederConstants.KV);
+            .withKV(Constants.feederConstants.KV)
+            .withKS(Constants.feederConstants.KS);
     // Optional: keep reverse torque at 0 so the feeder doesn't "suck back" when commanded near
     // zero.
     cfg.TorqueCurrent.PeakReverseTorqueCurrent = 0.0;
     cfg.CurrentLimits.SupplyCurrentLimitEnable = false;
     cfg.CurrentLimits.StatorCurrentLimitEnable = false;
     motor.getConfigurator().apply(cfg);
+
+    var followerCfg = new TalonFXConfiguration();
+    followerCfg.MotorOutput.NeutralMode = NeutralModeValue.Coast;
+    followerCfg.Feedback.SensorToMechanismRatio = Constants.feederConstants.SENSOR_TO_MECH_RATIO;
+    followerCfg.Slot0 = cfg.Slot0;
+    followerCfg.CurrentLimits.SupplyCurrentLimitEnable = false;
+    followerCfg.CurrentLimits.StatorCurrentLimitEnable = false;
+    followerMotor.getConfigurator().apply(followerCfg);
+
+    followerReq = new Follower(motor.getDeviceID(), Constants.feederConstants.FOLLOWER_ALIGNMENT);
+    followerMotor.setControl(followerReq);
 
     velocity = motor.getVelocity();
     appliedVolts = motor.getMotorVoltage();
@@ -75,5 +91,6 @@ public class FeederIOTalonFX implements FeederIO {
   @Override
   public void stop() {
     motor.stopMotor();
+    followerMotor.stopMotor();
   }
 }
