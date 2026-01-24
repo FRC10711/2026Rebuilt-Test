@@ -63,6 +63,8 @@ import org.littletonrobotics.junction.networktables.LoggedDashboardChooser;
 public class RobotContainer {
   // Subsystems
   public final Drive drive;
+  // public TalonFX Tester = new TalonFX(1);
+  // public TalonFX Tester2 = new TalonFX(2);
   private LoggedTunableNumber hoodAngle = new LoggedTunableNumber("Shooter/Hood Angle", 0);
   private LoggedTunableNumber Shooter = new LoggedTunableNumber("Shooter/ShooterVel", 0);
   private LoggedTunableNumber testShooterVel =
@@ -86,7 +88,7 @@ public class RobotContainer {
   public final Indexer indexer;
 
   // Controller
-  private final CommandXboxController controller = new CommandXboxController(0);
+  public final CommandXboxController controller = new CommandXboxController(0);
 
   /** Driver X speed supplier (forward/back). */
   public DoubleSupplier getDriveXSupplier() {

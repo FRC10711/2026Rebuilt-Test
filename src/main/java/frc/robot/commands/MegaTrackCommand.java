@@ -35,6 +35,21 @@ public class MegaTrackCommand extends Command {
   private static final double HEADING_TOL_RAD = Math.toRadians(2.0);
 
   private static final double FEEDER_RPS = 30.0;
+  private static final double INDEXER_VOLTS = 10.0;
+
+  // --- State machine thresholds ---
+  /** Enter reaccelerate when flywheel drops below (setpoint - this). */
+  private static final double REACCEL_ENTER_DROP_RPS = 30.0;
+  /** Exit reaccelerate when flywheel rises above (setpoint - this). */
+  private static final double REACCEL_EXIT_DROP_RPS = 1.0;
+  /** Big acceleration feedforward applied during reaccelerate (RPS/s). */
+  private static final double REACCEL_BIG_ACCEL_FF_RPS_PER_SEC = 0.0;
+
+  private enum State {
+    ALIGNING,
+    SHOOT,
+    REACCELERATE
+  }
 
   private final RobotContainer robotContainer;
   private final frc.robot.subsystems.drive.Drive drive;
@@ -46,6 +61,37 @@ public class MegaTrackCommand extends Command {
       new PIDController(HEADING_KP, HEADING_KI, HEADING_KD);
 
   private Rotation2d heldHeading = new Rotation2d();
+  private State state = State.ALIGNING;
+
+  // --- Per-cycle updated values ---
+  private Translation2d driverLinearVelocity = new Translation2d();
+  private Translation2d shotOrigin = new Translation2d();
+  private Translation2d fixedTarget = new Translation2d();
+  private double distanceToTargetMeters = 0.0;
+  private Rotation2d targetHeading = new Rotation2d();
+
+  private double omegaPidRadPerSec = 0.0;
+  private double omegaFfRadPerSec = 0.0;
+  private double omegaRadPerSec = 0.0;
+
+  private double hoodAngleDeg = 0.0;
+  private double shooterSpeedRps = 0.0;
+  private double shooterAccelFfRpsPerSec = 0.0;
+
+  private boolean shootDistanceOk = false;
+  private double flywheelMeasRps = 0.0;
+  private double flywheelErrRps = 0.0;
+  private double hoodErrDeg = 0.0;
+  private double headingErrRad = 0.0;
+  private boolean flywheelOk = false;
+  private boolean hoodOk = false;
+  private boolean headingOk = false;
+  private boolean triggerHeld = false;
+
+  private boolean readyToShoot = false;
+  private boolean alignmentStillValid = false;
+  private boolean flywheelDroppedForReaccel = false;
+  private boolean flywheelRecoveredFromReaccel = false;
 
   /** Returns the flywheel/shot origin position in field coordinates (accounts for offset). */
   private Translation2d getShotOriginField() {
@@ -72,9 +118,16 @@ public class MegaTrackCommand extends Command {
   public void initialize() {
     headingController.reset();
     heldHeading = drive.getRotation();
+    state = State.ALIGNING;
   }
 
-  Translation2d getFixedTarget(
+  private void setState(State newState) {
+    if (newState != state) {
+      state = newState;
+    }
+  }
+
+  private Translation2d getFixedTarget(
       Translation2d originTranslation2d,
       Translation2d targetTranslation2d,
       ChassisSpeeds fieldRelativeRobotSpeeds) {
@@ -87,6 +140,205 @@ public class MegaTrackCommand extends Command {
     Translation2d fixedTranslation2d =
         m_robotTelativeTargetTranslation.minus(m_velocityContributionTranslation);
     return fixedTranslation2d;
+  }
+
+  private void stopFeed() {
+    robotContainer.feeder.stop();
+    robotContainer.indexer.stop();
+  }
+
+  private void runFeed() {
+    robotContainer.feeder.setVelocity(FEEDER_RPS);
+    robotContainer.indexer.setVoltage(INDEXER_VOLTS);
+  }
+
+  /** Returns shooter acceleration feedforward (RPS/s) from slope*dDot and updates logs. */
+  private double getShooterAccelFfRpsPerSec() {
+    double shooterSlope =
+        slopeAtDistance(AutoShootConstants.shooterSpeedMap, distanceToTargetMeters, 0.15);
+    ChassisSpeeds vField = drive.getFieldRelativeSpeeds();
+    Translation2d aField = drive.getFieldRelativeAcceleration();
+    Translation2d r =
+        targetTranslation
+            .minus(shotOrigin)
+            .minus(
+                new Translation2d(vField.vxMetersPerSecond, vField.vyMetersPerSecond)
+                    .times(AutoShootConstants.FlyTime));
+    double dDot = estimateDistanceRate(r, vField, aField, AutoShootConstants.FlyTime);
+    double accelFf = shooterSlope * dDot * SHOOTER_ACCEL_FF_GAIN;
+
+    Logger.recordOutput("AutoShoot/DistanceRate", dDot);
+    Logger.recordOutput("AutoShoot/ShooterSlope", shooterSlope);
+    Logger.recordOutput("AutoShoot/ShooterAccelFFRpsPerSec", accelFf);
+    return accelFf;
+  }
+
+  private void aligning() {
+    // Common per-cycle updates
+    TraceTarget();
+    // Shooter setpoints / FF
+    hoodAngleDeg = AutoShootConstants.hoodAngleMap.get(distanceToTargetMeters);
+    shooterSpeedRps = AutoShootConstants.shooterSpeedMap.get(distanceToTargetMeters);
+
+    shooterAccelFfRpsPerSec = getShooterAccelFfRpsPerSec();
+
+    Logger.recordOutput("AutoShoot/Distance", distanceToTargetMeters);
+    Logger.recordOutput("AutoShoot/HoodAngleDeg", hoodAngleDeg);
+    Logger.recordOutput("AutoShoot/ShooterSpeedRPS", shooterSpeedRps);
+    updateBooleans();
+
+    // Shooter control (aligning)
+    robotContainer.shooter.setHoodAngle(hoodAngleDeg);
+    robotContainer.shooter.setVelocity(shooterSpeedRps, shooterAccelFfRpsPerSec);
+
+    stopFeed();
+    if (readyToShoot) {
+      setState(State.SHOOT);
+    }
+  }
+
+  private void shoot() {
+    // Common per-cycle updates
+    TraceTarget();
+    // Shooter setpoints / FF
+    hoodAngleDeg = AutoShootConstants.hoodAngleMap.get(distanceToTargetMeters);
+    shooterSpeedRps = AutoShootConstants.shooterSpeedMap.get(distanceToTargetMeters);
+
+    shooterAccelFfRpsPerSec = getShooterAccelFfRpsPerSec();
+
+    Logger.recordOutput("AutoShoot/Distance", distanceToTargetMeters);
+    Logger.recordOutput("AutoShoot/HoodAngleDeg", hoodAngleDeg);
+    Logger.recordOutput("AutoShoot/ShooterSpeedRPS", shooterSpeedRps);
+    updateBooleans();
+
+    // Shooter control (shooting)
+    robotContainer.shooter.setHoodAngle(hoodAngleDeg);
+    robotContainer.shooter.setVelocity(shooterSpeedRps, shooterAccelFfRpsPerSec);
+
+    runFeed();
+
+    if (!alignmentStillValid) {
+      setState(State.ALIGNING);
+      return;
+    }
+    if (flywheelDroppedForReaccel) {
+      setState(State.REACCELERATE);
+    }
+  }
+
+  private void reaccelerate() {
+    // Common per-cycle updates
+    TraceTarget();
+    // Shooter setpoints / FF
+    hoodAngleDeg = Math.max(AutoShootConstants.hoodAngleMap.get(distanceToTargetMeters) - 5, 0);
+    shooterSpeedRps =
+        Math.max(AutoShootConstants.shooterSpeedMap.get(distanceToTargetMeters) - 2, 0);
+
+    shooterAccelFfRpsPerSec = getShooterAccelFfRpsPerSec();
+
+    Logger.recordOutput("AutoShoot/Distance", distanceToTargetMeters);
+    Logger.recordOutput("AutoShoot/HoodAngleDeg", hoodAngleDeg);
+    Logger.recordOutput("AutoShoot/ShooterSpeedRPS", shooterSpeedRps);
+    updateBooleans();
+
+    // Shooter control (reaccelerate)
+    robotContainer.shooter.setHoodAngle(hoodAngleDeg);
+    robotContainer.shooter.setVelocity(shooterSpeedRps, REACCEL_BIG_ACCEL_FF_RPS_PER_SEC);
+
+    runFeed();
+
+    if (!alignmentStillValid) {
+      setState(State.ALIGNING);
+      return;
+    }
+    if (flywheelRecoveredFromReaccel) {
+      setState(State.SHOOT);
+    }
+  }
+
+  /** Common chain: compute target heading + omega and apply to drivetrain. */
+  private void TraceTarget() {
+    driverLinearVelocity =
+        DriveCommands.getLinearVelocityFromJoysticks(
+            xSupplier.getAsDouble(), ySupplier.getAsDouble());
+
+    shotOrigin = getShotOriginField();
+    fixedTarget = getFixedTarget(shotOrigin, targetTranslation, drive.getFieldRelativeSpeeds());
+    distanceToTargetMeters = fixedTarget.getNorm();
+
+    boolean allowHeadingUpdate =
+        distanceToTargetMeters >= HEADING_HOLD_MIN_DIST_METERS
+            && distanceToTargetMeters <= HEADING_HOLD_MAX_DIST_METERS
+            && distanceToTargetMeters > 1e-3;
+    if (allowHeadingUpdate) {
+      heldHeading = fixedTarget.getAngle();
+    }
+    targetHeading = heldHeading;
+
+    Logger.recordOutput("AutoShoot/FixedTarget", fixedTarget.plus(shotOrigin));
+    Logger.recordOutput("AutoShoot/ShotOrigin", shotOrigin);
+    Logger.recordOutput("AutoShoot/HeadingAllowUpdate", allowHeadingUpdate);
+    Logger.recordOutput("AutoShoot/HeadingHeldDeg", heldHeading.getDegrees());
+    Logger.recordOutput(
+        "AutoShoot/TargetPose", new Pose2d(drive.getPose().getTranslation(), targetHeading));
+
+    omegaPidRadPerSec =
+        headingController.calculate(drive.getRotation().getRadians(), targetHeading.getRadians());
+    omegaFfRadPerSec = rotateOmegaTarget(drive.getFieldRelativeAcceleration());
+    omegaRadPerSec =
+        MathUtil.clamp(
+            omegaPidRadPerSec + omegaFfRadPerSec,
+            -drive.getMaxAngularSpeedRadPerSec(),
+            drive.getMaxAngularSpeedRadPerSec());
+    Logger.recordOutput("AutoShoot/HeadingOmegaPID", omegaPidRadPerSec);
+    Logger.recordOutput("AutoShoot/HeadingOmegaFF", omegaFfRadPerSec);
+
+    ChassisSpeeds fieldRelative =
+        new ChassisSpeeds(
+            driverLinearVelocity.getX() * AutoShootConstants.MAX_SHOOTING_VELOCITY,
+            driverLinearVelocity.getY() * AutoShootConstants.MAX_SHOOTING_VELOCITY,
+            omegaRadPerSec);
+    boolean isFlipped =
+        DriverStation.getAlliance().isPresent()
+            && DriverStation.getAlliance().get() == Alliance.Red;
+    drive.runVelocity(
+        ChassisSpeeds.fromFieldRelativeSpeeds(
+            fieldRelative,
+            isFlipped ? drive.getRotation().plus(new Rotation2d(Math.PI)) : drive.getRotation()));
+  }
+
+  /** Updates all boolean/threshold checks (does not command anything). */
+  private void updateBooleans() {
+    shootDistanceOk =
+        distanceToTargetMeters >= MIN_SHOOT_DIST_METERS
+            && distanceToTargetMeters <= MAX_SHOOT_DIST_METERS;
+    flywheelMeasRps = robotContainer.shooter.getFlywheelVelocityRps();
+    flywheelErrRps = shooterSpeedRps - flywheelMeasRps;
+    hoodErrDeg = hoodAngleDeg - robotContainer.shooter.getHoodAngleDeg();
+    headingErrRad =
+        MathUtil.angleModulus(targetHeading.getRadians() - drive.getRotation().getRadians());
+
+    flywheelOk = Math.abs(flywheelErrRps) <= FLYWHEEL_RPS_TOL;
+    hoodOk = Math.abs(hoodErrDeg) <= HOOD_DEG_TOL;
+    headingOk = Math.abs(headingErrRad) <= HEADING_TOL_RAD;
+    triggerHeld = robotContainer.getRightTriggerAxisSupplier().getAsDouble() > 0.25;
+
+    readyToShoot = shootDistanceOk && flywheelOk && hoodOk && headingOk && triggerHeld;
+    alignmentStillValid = headingOk;
+
+    flywheelDroppedForReaccel = flywheelMeasRps < (shooterSpeedRps - REACCEL_ENTER_DROP_RPS);
+    flywheelRecoveredFromReaccel = flywheelMeasRps > (shooterSpeedRps - REACCEL_EXIT_DROP_RPS);
+
+    Logger.recordOutput("AutoShoot/ShootDistanceOk", shootDistanceOk);
+    Logger.recordOutput("AutoShoot/FlywheelMeasRps", flywheelMeasRps);
+    Logger.recordOutput("AutoShoot/FlywheelErrRps", flywheelErrRps);
+    Logger.recordOutput("AutoShoot/HoodErrDeg", hoodErrDeg);
+    Logger.recordOutput("AutoShoot/HeadingErrDeg", Math.toDegrees(headingErrRad));
+    Logger.recordOutput("AutoShoot/TriggerHeld", triggerHeld);
+    Logger.recordOutput("AutoShoot/ReadyToShoot", readyToShoot);
+    Logger.recordOutput("AutoShoot/AlignmentStillValid", alignmentStillValid);
+    Logger.recordOutput("AutoShoot/FlywheelDropped", flywheelDroppedForReaccel);
+    Logger.recordOutput("AutoShoot/FlywheelRecovered", flywheelRecoveredFromReaccel);
   }
 
   private static double slopeAtDistance(
@@ -168,146 +420,12 @@ public class MegaTrackCommand extends Command {
 
   @Override
   public void execute() {
-    // Driver translation (field-relative)
-    Translation2d linearVelocity =
-        DriveCommands.getLinearVelocityFromJoysticks(
-            xSupplier.getAsDouble(), ySupplier.getAsDouble());
-
-    Translation2d shotOrigin = getShotOriginField();
-
-    // Compute target heading (field-relative) with fly-time compensation
-    Translation2d fixedTargetTranslation2d =
-        getFixedTarget(shotOrigin, targetTranslation, drive.getFieldRelativeSpeeds());
-    Logger.recordOutput("AutoShoot/FixedTarget", fixedTargetTranslation2d.plus(shotOrigin));
-    double distanceToTarget = fixedTargetTranslation2d.getNorm();
-
-    // Update heading target only when distance is in a reasonable window.
-    // Too close: heading jumps quickly; too far: we don't intend to shoot anyway.
-    boolean allowHeadingUpdate =
-        distanceToTarget >= HEADING_HOLD_MIN_DIST_METERS
-            && distanceToTarget <= HEADING_HOLD_MAX_DIST_METERS
-            && distanceToTarget > 1e-3;
-    if (allowHeadingUpdate) {
-      heldHeading = fixedTargetTranslation2d.getAngle();
+    Logger.recordOutput("AutoShoot/State", state.toString());
+    switch (state) {
+      case ALIGNING -> aligning();
+      case SHOOT -> shoot();
+      case REACCELERATE -> reaccelerate();
     }
-
-    Rotation2d targetHeading = heldHeading;
-    Logger.recordOutput(
-        "AutoShoot/TargetPose", new Pose2d(drive.getPose().getTranslation(), targetHeading));
-    Logger.recordOutput("AutoShoot/ShotOrigin", shotOrigin);
-    Logger.recordOutput("AutoShoot/HeadingAllowUpdate", allowHeadingUpdate);
-    Logger.recordOutput("AutoShoot/HeadingHeldDeg", heldHeading.getDegrees());
-
-    // Heading control (PID) to face the target
-    double omegaPidRadPerSec =
-        headingController.calculate(drive.getRotation().getRadians(), targetHeading.getRadians());
-
-    double omegaFfRadPerSec = rotateOmegaTarget(drive.getFieldRelativeAcceleration());
-    Logger.recordOutput("AutoShoot/HeadingOmegaPID", omegaPidRadPerSec);
-    Logger.recordOutput("AutoShoot/HeadingOmegaFF", omegaFfRadPerSec);
-
-    double omegaRadPerSec = omegaPidRadPerSec + omegaFfRadPerSec;
-    omegaRadPerSec =
-        MathUtil.clamp(
-            omegaRadPerSec,
-            -drive.getMaxAngularSpeedRadPerSec(),
-            drive.getMaxAngularSpeedRadPerSec());
-
-    // Combine into field-relative chassis speeds then convert to robot-relative for Drive
-    ChassisSpeeds fieldRelative =
-        new ChassisSpeeds(
-            linearVelocity.getX() * AutoShootConstants.MAX_SHOOTING_VELOCITY,
-            linearVelocity.getY() * AutoShootConstants.MAX_SHOOTING_VELOCITY,
-            omegaRadPerSec);
-
-    boolean isFlipped =
-        DriverStation.getAlliance().isPresent()
-            && DriverStation.getAlliance().get() == Alliance.Red;
-    drive.runVelocity(
-        ChassisSpeeds.fromFieldRelativeSpeeds(
-            fieldRelative,
-            isFlipped ? drive.getRotation().plus(new Rotation2d(Math.PI)) : drive.getRotation()));
-    double d = distanceToTarget;
-
-    // Baseline from maps (static)
-    double hoodBase = AutoShootConstants.hoodAngleMap.get(d);
-    double shooterBase = AutoShootConstants.shooterSpeedMap.get(d);
-
-    // Slopes at current distance
-    double hoodSlope = slopeAtDistance(AutoShootConstants.hoodAngleMap, d, 0.15); // deg/m or rad/m
-    double shooterSlope =
-        slopeAtDistance(AutoShootConstants.shooterSpeedMap, d, 0.15); // (rpm)/m or (rps)/m
-
-    // Estimate delta distance over flight time due to motion
-    ChassisSpeeds vField = drive.getFieldRelativeSpeeds();
-    Translation2d aField = drive.getFieldRelativeAcceleration();
-
-    // r = g - p - T*v  (same as your fixed target vector)
-    Translation2d r =
-        targetTranslation
-            .minus(shotOrigin)
-            .minus(
-                new Translation2d(vField.vxMetersPerSecond, vField.vyMetersPerSecond)
-                    .times(AutoShootConstants.FlyTime));
-
-    double dDot = estimateDistanceRate(r, vField, aField, AutoShootConstants.FlyTime); // m/s
-
-    // Feedforward signal:
-    // - shooter: acceleration feedforward (RPS/s) = d(omega)/dd * dDot
-    double shooterAccelFfRpsPerSec = shooterSlope * dDot * SHOOTER_ACCEL_FF_GAIN;
-
-    Logger.recordOutput("AutoShoot/DistanceRate", dDot);
-    Logger.recordOutput("AutoShoot/HoodSlope", hoodSlope);
-    Logger.recordOutput("AutoShoot/ShooterSlope", shooterSlope);
-    Logger.recordOutput("AutoShoot/ShooterAccelFFRpsPerSec", shooterAccelFfRpsPerSec);
-    Logger.recordOutput("AutoShoot/ShooterAccelFFGain", SHOOTER_ACCEL_FF_GAIN);
-
-    double hoodAngle = hoodBase + 1;
-    double shooterSpeed = shooterBase + 1;
-
-    Logger.recordOutput("AutoShoot/Distance", d);
-    Logger.recordOutput("AutoShoot/HoodBase", hoodBase);
-    Logger.recordOutput("AutoShoot/HoodFinal", hoodAngle);
-    Logger.recordOutput("AutoShoot/ShooterBase", shooterBase);
-    Logger.recordOutput("AutoShoot/ShooterFinal", shooterSpeed);
-
-    // Actually command shooter for testing
-    // Hood/backplate feedforward ignored for now
-    robotContainer.shooter.setHoodAngle(hoodAngle);
-    robotContainer.shooter.setVelocity(shooterSpeed, shooterAccelFfRpsPerSec);
-
-    // --- Shoot readiness + feeder control ---
-    boolean shootDistanceOk = d >= MIN_SHOOT_DIST_METERS && d <= MAX_SHOOT_DIST_METERS;
-
-    double flywheelErr = shooterSpeed - robotContainer.shooter.getFlywheelVelocityRps();
-    double hoodErr = hoodAngle - robotContainer.shooter.getHoodAngleDeg();
-    double headingErrRad =
-        MathUtil.angleModulus(targetHeading.getRadians() - drive.getRotation().getRadians());
-
-    boolean flywheelOk = Math.abs(flywheelErr) <= FLYWHEEL_RPS_TOL;
-    boolean hoodOk = Math.abs(hoodErr) <= HOOD_DEG_TOL;
-    boolean headingOk = Math.abs(headingErrRad) <= HEADING_TOL_RAD;
-
-    boolean readyToShoot = shootDistanceOk && flywheelOk && hoodOk && headingOk;
-    Logger.recordOutput("AutoShoot/ShootDistanceOk", shootDistanceOk);
-    Logger.recordOutput("AutoShoot/FlywheelErrRps", flywheelErr);
-    Logger.recordOutput("AutoShoot/HoodErrDeg", hoodErr);
-    Logger.recordOutput("AutoShoot/HeadingErrDeg", Math.toDegrees(headingErrRad));
-    Logger.recordOutput("AutoShoot/ReadyToShoot", readyToShoot);
-
-    if (readyToShoot) {
-      robotContainer.feeder.setVelocity(FEEDER_RPS);
-    } else {
-      // robotContainer.feeder.stop();
-      robotContainer.indexer.stop();
-    }
-
-    // Log suggested shooter parameters (for dashboards/other commands to consume)
-    Logger.recordOutput("AutoShoot/DistanceToTarget", distanceToTarget);
-    Logger.recordOutput(
-        "AutoShoot/HoodAngleDeg", AutoShootConstants.hoodAngleMap.get(distanceToTarget));
-    Logger.recordOutput(
-        "AutoShoot/ShooterSpeedRPS", AutoShootConstants.shooterSpeedMap.get(distanceToTarget));
   }
 
   @Override

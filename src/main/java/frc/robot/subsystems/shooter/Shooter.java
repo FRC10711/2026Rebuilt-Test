@@ -29,6 +29,7 @@ public class Shooter extends SubsystemBase {
 
   /** Sets shooter flywheel velocity (RPM). */
   public void setVelocity(double rps) {
+
     flywheelSetpointRPS = rps;
     flywheelAccelSetpointRpsPerSec = 0.0;
     io.setFlywheelVelocity(rps);
