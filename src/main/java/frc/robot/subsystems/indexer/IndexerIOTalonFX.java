@@ -20,12 +20,12 @@ public class IndexerIOTalonFX implements IndexerIO {
   private final StatusSignal<Current> current;
 
   public IndexerIOTalonFX() {
-    motor = new TalonFX(Constants.indexerConstants.MOTOR_ID);
+    motor = new TalonFX(Constants.IndexerConstants.MOTOR_ID);
 
     var cfg = new TalonFXConfiguration();
     cfg.MotorOutput.NeutralMode = NeutralModeValue.Coast;
     cfg.MotorOutput.Inverted =
-        Constants.indexerConstants.INVERTED
+        Constants.IndexerConstants.INVERTED
             ? InvertedValue.Clockwise_Positive
             : InvertedValue.CounterClockwise_Positive;
     motor.getConfigurator().apply(cfg);

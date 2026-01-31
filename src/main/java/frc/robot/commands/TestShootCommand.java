@@ -65,7 +65,7 @@ public class TestShootCommand extends Command {
       // Distance input is assumed to be from robot center; convert to distance from shooter exit.
       double distanceFromCenter = distanceMetersSupplier.getAsDouble();
       double distanceFromShooter =
-          Math.max(0.0, distanceFromCenter - Constants.shooterConstants.FLYWHEEL_OFFSET_X_METERS);
+          Math.max(0.0, distanceFromCenter - Constants.ShooterConstants.FLYWHEEL_OFFSET_X_METERS);
 
       shooterRps = AutoShootConstants.shooterSpeedMap.get(distanceFromShooter);
       hoodDeg = AutoShootConstants.hoodAngleMap.get(distanceFromShooter);

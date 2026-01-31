@@ -8,7 +8,7 @@ import com.ctre.phoenix6.configs.Slot0Configs;
 import com.ctre.phoenix6.configs.TalonFXConfiguration;
 import com.ctre.phoenix6.controls.Follower;
 import com.ctre.phoenix6.controls.MotionMagicTorqueCurrentFOC;
-import com.ctre.phoenix6.controls.VelocityVoltage;
+import com.ctre.phoenix6.controls.VelocityTorqueCurrentFOC;
 import com.ctre.phoenix6.hardware.TalonFX;
 import com.ctre.phoenix6.signals.InvertedValue;
 import com.ctre.phoenix6.signals.NeutralModeValue;
@@ -24,7 +24,7 @@ public class ShooterIOTalonFX implements ShooterIO {
   private final TalonFX hoodMotor;
 
   // Control requests
-  private final VelocityVoltage flywheelVelocityReq = new VelocityVoltage(0.0);
+  private final VelocityTorqueCurrentFOC flywheelVelocityReq = new VelocityTorqueCurrentFOC(0.0);
   private final MotionMagicTorqueCurrentFOC hoodMotionMagicReq =
       new MotionMagicTorqueCurrentFOC(0.0);
   private final Follower flywheelFollowerReq;
@@ -44,63 +44,63 @@ public class ShooterIOTalonFX implements ShooterIO {
   private final StatusSignal<Current> hoodCurrent;
 
   public ShooterIOTalonFX() {
-    flywheelLeader = new TalonFX(Constants.shooterConstants.FLYWHEEL_LEADER_ID);
-    flywheelFollower = new TalonFX(Constants.shooterConstants.FLYWHEEL_FOLLOWER_ID);
-    hoodMotor = new TalonFX(Constants.shooterConstants.HOOD_MOTOR_ID);
+    flywheelLeader = new TalonFX(Constants.ShooterConstants.FLYWHEEL_LEADER_ID);
+    flywheelFollower = new TalonFX(Constants.ShooterConstants.FLYWHEEL_FOLLOWER_ID);
+    hoodMotor = new TalonFX(Constants.ShooterConstants.HOOD_MOTOR_ID);
 
     // Configure flywheel motors (velocity closed-loop in Slot0, sensor ratio to mechanism)
     var flywheelCfg = new TalonFXConfiguration();
     flywheelCfg.MotorOutput.NeutralMode = NeutralModeValue.Coast;
     flywheelCfg.MotorOutput.Inverted =
-        Constants.shooterConstants.FLYWHEEL_LEADER_INVERTED
+        Constants.ShooterConstants.FLYWHEEL_LEADER_INVERTED
             ? InvertedValue.Clockwise_Positive
             : InvertedValue.CounterClockwise_Positive;
     flywheelCfg.TorqueCurrent.PeakReverseTorqueCurrent = 0;
     flywheelCfg.Feedback.SensorToMechanismRatio =
-        Constants.shooterConstants.FLYWHEEL_SENSOR_TO_MECH_RATIO;
+        Constants.ShooterConstants.FLYWHEEL_SENSOR_TO_MECH_RATIO;
     flywheelCfg.Slot0 =
         new Slot0Configs()
-            .withKP(Constants.shooterConstants.FLYWHEEL_KP)
-            .withKI(Constants.shooterConstants.FLYWHEEL_KI)
-            .withKD(Constants.shooterConstants.FLYWHEEL_KD)
-            .withKV(Constants.shooterConstants.FLYWHEEL_KV)
-            .withKS(Constants.shooterConstants.FLYWHEEL_KS);
+            .withKP(Constants.ShooterConstants.FLYWHEEL_KP)
+            .withKI(Constants.ShooterConstants.FLYWHEEL_KI)
+            .withKD(Constants.ShooterConstants.FLYWHEEL_KD)
+            .withKV(Constants.ShooterConstants.FLYWHEEL_KV)
+            .withKS(Constants.ShooterConstants.FLYWHEEL_KS);
     flywheelLeader.getConfigurator().apply(flywheelCfg);
 
     var followerCfg = new TalonFXConfiguration();
     followerCfg.MotorOutput.NeutralMode = NeutralModeValue.Coast;
     followerCfg.Feedback.SensorToMechanismRatio =
-        Constants.shooterConstants.FLYWHEEL_SENSOR_TO_MECH_RATIO;
+        Constants.ShooterConstants.FLYWHEEL_SENSOR_TO_MECH_RATIO;
     followerCfg.Slot0 = flywheelCfg.Slot0;
     flywheelFollower.getConfigurator().apply(followerCfg);
 
     flywheelFollowerReq =
         new Follower(
-            flywheelLeader.getDeviceID(), Constants.shooterConstants.FLYWHEEL_FOLLOWER_INVERTED);
+            flywheelLeader.getDeviceID(), Constants.ShooterConstants.FLYWHEEL_FOLLOWER_INVERTED);
     flywheelFollower.setControl(flywheelFollowerReq);
 
     // Configure hood motor for Motion Magic Voltage (position closed-loop in Slot0)
     var hoodCfg = new TalonFXConfiguration();
     hoodCfg.MotorOutput.NeutralMode = NeutralModeValue.Brake;
     hoodCfg.MotorOutput.Inverted =
-        Constants.shooterConstants.HOOD_INVERTED
+        Constants.ShooterConstants.HOOD_INVERTED
             ? InvertedValue.Clockwise_Positive
             : InvertedValue.CounterClockwise_Positive;
-    hoodCfg.Feedback.SensorToMechanismRatio = Constants.shooterConstants.HOOD_SENSOR_TO_MECH_RATIO;
+    hoodCfg.Feedback.SensorToMechanismRatio = Constants.ShooterConstants.HOOD_SENSOR_TO_MECH_RATIO;
     hoodCfg.Slot0 =
         new Slot0Configs()
-            .withKP(Constants.shooterConstants.HOOD_KP)
-            .withKI(Constants.shooterConstants.HOOD_KI)
-            .withKD(Constants.shooterConstants.HOOD_KD)
-            .withKS(Constants.shooterConstants.HOOD_KS)
-            .withKV(Constants.shooterConstants.HOOD_KV)
-            .withKA(Constants.shooterConstants.HOOD_KA)
-            .withKG(Constants.shooterConstants.HOOD_KG);
+            .withKP(Constants.ShooterConstants.HOOD_KP)
+            .withKI(Constants.ShooterConstants.HOOD_KI)
+            .withKD(Constants.ShooterConstants.HOOD_KD)
+            .withKS(Constants.ShooterConstants.HOOD_KS)
+            .withKV(Constants.ShooterConstants.HOOD_KV)
+            .withKA(Constants.ShooterConstants.HOOD_KA)
+            .withKG(Constants.ShooterConstants.HOOD_KG);
     hoodCfg.MotionMagic =
         new MotionMagicConfigs()
-            .withMotionMagicCruiseVelocity(Constants.shooterConstants.HOOD_MM_CRUISE_VELOCITY)
-            .withMotionMagicAcceleration(Constants.shooterConstants.HOOD_MM_ACCELERATION)
-            .withMotionMagicJerk(Constants.shooterConstants.HOOD_MM_JERK);
+            .withMotionMagicCruiseVelocity(Constants.ShooterConstants.HOOD_MM_CRUISE_VELOCITY)
+            .withMotionMagicAcceleration(Constants.ShooterConstants.HOOD_MM_ACCELERATION)
+            .withMotionMagicJerk(Constants.ShooterConstants.HOOD_MM_JERK);
     hoodMotor.getConfigurator().apply(hoodCfg);
     hoodMotor.setPosition(0);
     // Acquire status signals

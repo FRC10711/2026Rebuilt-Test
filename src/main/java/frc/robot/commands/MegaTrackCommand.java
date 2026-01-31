@@ -15,40 +15,9 @@ import frc.robot.RobotContainer;
 import org.littletonrobotics.junction.Logger;
 
 public class MegaTrackCommand extends Command {
-  private static final double HEADING_KP = 6.0;
-  private static final double HEADING_KI = 0.0;
-  private static final double HEADING_KD = 0.;
-
-  /** Scale for shooter acceleration feedforward computed from slope*dDot. */
-  private static final double SHOOTER_ACCEL_FF_GAIN = 1.0;
-  /** If true, include measured acceleration contribution in FF calculations (can be jumpy). */
-  private static final boolean USE_ACCEL_IN_FF = false;
-
-  // --- Shooting gating / heading hold tuning ---
-  private static final double MIN_SHOOT_DIST_METERS = 0.8;
-  private static final double MAX_SHOOT_DIST_METERS = 5.8;
-  private static final double HEADING_HOLD_MIN_DIST_METERS = 0.9;
-  private static final double HEADING_HOLD_MAX_DIST_METERS = 5.6;
-
-  private static final double FLYWHEEL_RPS_TOL = 1;
-  private static final double HOOD_DEG_TOL = 1.;
-  private static final double HEADING_TOL_RAD = Math.toRadians(2.0);
-
-  private static final double FEEDER_RPS = 30.0;
-  private static final double INDEXER_VOLTS = 10.0;
-
-  // --- State machine thresholds ---
-  /** Enter reaccelerate when flywheel drops below (setpoint - this). */
-  private static final double REACCEL_ENTER_DROP_RPS = 30.0;
-  /** Exit reaccelerate when flywheel rises above (setpoint - this). */
-  private static final double REACCEL_EXIT_DROP_RPS = 1.0;
-  /** Big acceleration feedforward applied during reaccelerate (RPS/s). */
-  private static final double REACCEL_BIG_ACCEL_FF_RPS_PER_SEC = 0.0;
-
   private enum State {
-    ALIGNING,
-    SHOOT,
-    REACCELERATE
+    ALIGN,
+    SHOOT
   }
 
   private final RobotContainer robotContainer;
@@ -58,10 +27,13 @@ public class MegaTrackCommand extends Command {
   private final Translation2d targetTranslation;
 
   private final PIDController headingController =
-      new PIDController(HEADING_KP, HEADING_KI, HEADING_KD);
+      new PIDController(
+          Constants.MegaTrackCommandConstants.HEADING_KP,
+          Constants.MegaTrackCommandConstants.HEADING_KI,
+          Constants.MegaTrackCommandConstants.HEADING_KD);
 
   private Rotation2d heldHeading = new Rotation2d();
-  private State state = State.ALIGNING;
+  private State state = State.ALIGN;
 
   // --- Per-cycle updated values ---
   private Translation2d driverLinearVelocity = new Translation2d();
@@ -83,23 +55,15 @@ public class MegaTrackCommand extends Command {
   private double flywheelErrRps = 0.0;
   private double hoodErrDeg = 0.0;
   private double headingErrRad = 0.0;
-  private boolean flywheelOk = false;
-  private boolean hoodOk = false;
-  private boolean headingOk = false;
   private boolean triggerHeld = false;
-
-  private boolean readyToShoot = false;
-  private boolean alignmentStillValid = false;
-  private boolean flywheelDroppedForReaccel = false;
-  private boolean flywheelRecoveredFromReaccel = false;
 
   /** Returns the flywheel/shot origin position in field coordinates (accounts for offset). */
   private Translation2d getShotOriginField() {
     var pose = drive.getPose();
     Translation2d offsetRobot =
         new Translation2d(
-            Constants.shooterConstants.FLYWHEEL_OFFSET_X_METERS,
-            Constants.shooterConstants.FLYWHEEL_OFFSET_Y_METERS);
+            Constants.ShooterConstants.FLYWHEEL_OFFSET_X_METERS,
+            Constants.ShooterConstants.FLYWHEEL_OFFSET_Y_METERS);
     Translation2d offsetField = offsetRobot.rotateBy(pose.getRotation());
     return pose.getTranslation().plus(offsetField);
   }
@@ -118,7 +82,7 @@ public class MegaTrackCommand extends Command {
   public void initialize() {
     headingController.reset();
     heldHeading = drive.getRotation();
-    state = State.ALIGNING;
+    state = State.ALIGN;
   }
 
   private void setState(State newState) {
@@ -148,8 +112,8 @@ public class MegaTrackCommand extends Command {
   }
 
   private void runFeed() {
-    robotContainer.feeder.setVelocity(FEEDER_RPS);
-    robotContainer.indexer.setVoltage(INDEXER_VOLTS);
+    robotContainer.feeder.setVelocity(Constants.MegaTrackCommandConstants.FEEDER_RPS);
+    robotContainer.indexer.setVoltage(Constants.MegaTrackCommandConstants.INDEXER_VOLTS);
   }
 
   /** Returns shooter acceleration feedforward (RPS/s) from slope*dDot and updates logs. */
@@ -165,7 +129,9 @@ public class MegaTrackCommand extends Command {
                 new Translation2d(vField.vxMetersPerSecond, vField.vyMetersPerSecond)
                     .times(AutoShootConstants.FlyTime));
     double dDot = estimateDistanceRate(r, vField, aField, AutoShootConstants.FlyTime);
-    double accelFf = shooterSlope * dDot * SHOOTER_ACCEL_FF_GAIN;
+    double accelFf =
+        shooterSlope * dDot * Constants.MegaTrackCommandConstants.SHOOTER_ACCEL_FF_GAIN;
+    // (gain is tunable)
 
     Logger.recordOutput("AutoShoot/DistanceRate", dDot);
     Logger.recordOutput("AutoShoot/ShooterSlope", shooterSlope);
@@ -173,7 +139,7 @@ public class MegaTrackCommand extends Command {
     return accelFf;
   }
 
-  private void aligning() {
+  private void align() {
     // Common per-cycle updates
     TraceTarget();
     // Shooter setpoints / FF
@@ -192,7 +158,7 @@ public class MegaTrackCommand extends Command {
     robotContainer.shooter.setVelocity(shooterSpeedRps, shooterAccelFfRpsPerSec);
 
     stopFeed();
-    if (readyToShoot) {
+    if (okToEnterShoot()) {
       setState(State.SHOOT);
     }
   }
@@ -215,45 +181,12 @@ public class MegaTrackCommand extends Command {
     robotContainer.shooter.setHoodAngle(hoodAngleDeg);
     robotContainer.shooter.setVelocity(shooterSpeedRps, shooterAccelFfRpsPerSec);
 
-    runFeed();
-
-    if (!alignmentStillValid) {
-      setState(State.ALIGNING);
+    if (!okToStayShoot()) {
+      stopFeed();
+      setState(State.ALIGN);
       return;
     }
-    if (flywheelDroppedForReaccel) {
-      setState(State.REACCELERATE);
-    }
-  }
-
-  private void reaccelerate() {
-    // Common per-cycle updates
-    TraceTarget();
-    // Shooter setpoints / FF
-    hoodAngleDeg = Math.max(AutoShootConstants.hoodAngleMap.get(distanceToTargetMeters) - 5, 0);
-    shooterSpeedRps =
-        Math.max(AutoShootConstants.shooterSpeedMap.get(distanceToTargetMeters) - 2, 0);
-
-    shooterAccelFfRpsPerSec = getShooterAccelFfRpsPerSec();
-
-    Logger.recordOutput("AutoShoot/Distance", distanceToTargetMeters);
-    Logger.recordOutput("AutoShoot/HoodAngleDeg", hoodAngleDeg);
-    Logger.recordOutput("AutoShoot/ShooterSpeedRPS", shooterSpeedRps);
-    updateBooleans();
-
-    // Shooter control (reaccelerate)
-    robotContainer.shooter.setHoodAngle(hoodAngleDeg);
-    robotContainer.shooter.setVelocity(shooterSpeedRps, REACCEL_BIG_ACCEL_FF_RPS_PER_SEC);
-
     runFeed();
-
-    if (!alignmentStillValid) {
-      setState(State.ALIGNING);
-      return;
-    }
-    if (flywheelRecoveredFromReaccel) {
-      setState(State.SHOOT);
-    }
   }
 
   /** Common chain: compute target heading + omega and apply to drivetrain. */
@@ -267,8 +200,9 @@ public class MegaTrackCommand extends Command {
     distanceToTargetMeters = fixedTarget.getNorm();
 
     boolean allowHeadingUpdate =
-        distanceToTargetMeters >= HEADING_HOLD_MIN_DIST_METERS
-            && distanceToTargetMeters <= HEADING_HOLD_MAX_DIST_METERS
+        distanceToTargetMeters >= Constants.MegaTrackCommandConstants.HEADING_HOLD_MIN_DIST_METERS
+            && distanceToTargetMeters
+                <= Constants.MegaTrackCommandConstants.HEADING_HOLD_MAX_DIST_METERS
             && distanceToTargetMeters > 1e-3;
     if (allowHeadingUpdate) {
       heldHeading = fixedTarget.getAngle();
@@ -310,24 +244,14 @@ public class MegaTrackCommand extends Command {
   /** Updates all boolean/threshold checks (does not command anything). */
   private void updateBooleans() {
     shootDistanceOk =
-        distanceToTargetMeters >= MIN_SHOOT_DIST_METERS
-            && distanceToTargetMeters <= MAX_SHOOT_DIST_METERS;
+        distanceToTargetMeters >= Constants.MegaTrackCommandConstants.MIN_SHOOT_DIST_METERS
+            && distanceToTargetMeters <= Constants.MegaTrackCommandConstants.MAX_SHOOT_DIST_METERS;
     flywheelMeasRps = robotContainer.shooter.getFlywheelVelocityRps();
     flywheelErrRps = shooterSpeedRps - flywheelMeasRps;
     hoodErrDeg = hoodAngleDeg - robotContainer.shooter.getHoodAngleDeg();
     headingErrRad =
         MathUtil.angleModulus(targetHeading.getRadians() - drive.getRotation().getRadians());
-
-    flywheelOk = Math.abs(flywheelErrRps) <= FLYWHEEL_RPS_TOL;
-    hoodOk = Math.abs(hoodErrDeg) <= HOOD_DEG_TOL;
-    headingOk = Math.abs(headingErrRad) <= HEADING_TOL_RAD;
     triggerHeld = robotContainer.getRightTriggerAxisSupplier().getAsDouble() > 0.25;
-
-    readyToShoot = shootDistanceOk && flywheelOk && hoodOk && headingOk && triggerHeld;
-    alignmentStillValid = headingOk;
-
-    flywheelDroppedForReaccel = flywheelMeasRps < (shooterSpeedRps - REACCEL_ENTER_DROP_RPS);
-    flywheelRecoveredFromReaccel = flywheelMeasRps > (shooterSpeedRps - REACCEL_EXIT_DROP_RPS);
 
     Logger.recordOutput("AutoShoot/ShootDistanceOk", shootDistanceOk);
     Logger.recordOutput("AutoShoot/FlywheelMeasRps", flywheelMeasRps);
@@ -335,10 +259,30 @@ public class MegaTrackCommand extends Command {
     Logger.recordOutput("AutoShoot/HoodErrDeg", hoodErrDeg);
     Logger.recordOutput("AutoShoot/HeadingErrDeg", Math.toDegrees(headingErrRad));
     Logger.recordOutput("AutoShoot/TriggerHeld", triggerHeld);
-    Logger.recordOutput("AutoShoot/ReadyToShoot", readyToShoot);
-    Logger.recordOutput("AutoShoot/AlignmentStillValid", alignmentStillValid);
-    Logger.recordOutput("AutoShoot/FlywheelDropped", flywheelDroppedForReaccel);
-    Logger.recordOutput("AutoShoot/FlywheelRecovered", flywheelRecoveredFromReaccel);
+  }
+
+  // Two different threshold functions (hysteresis):
+  private boolean okToEnterShoot() {
+    boolean ok =
+        shootDistanceOk
+            && triggerHeld
+            && Math.abs(flywheelErrRps)
+                <= Constants.MegaTrackCommandConstants.ENTER_FLYWHEEL_RPS_TOL
+            && Math.abs(hoodErrDeg) <= Constants.MegaTrackCommandConstants.ENTER_HOOD_DEG_TOL
+            && Math.abs(headingErrRad) <= Constants.MegaTrackCommandConstants.ENTER_HEADING_TOL_RAD;
+    Logger.recordOutput("AutoShoot/OkEnterShoot", ok);
+    return ok;
+  }
+
+  private boolean okToStayShoot() {
+    boolean ok =
+        shootDistanceOk
+            && triggerHeld
+            && Math.abs(flywheelErrRps) <= Constants.MegaTrackCommandConstants.EXIT_FLYWHEEL_RPS_TOL
+            && Math.abs(hoodErrDeg) <= Constants.MegaTrackCommandConstants.EXIT_HOOD_DEG_TOL
+            && Math.abs(headingErrRad) <= Constants.MegaTrackCommandConstants.EXIT_HEADING_TOL_RAD;
+    Logger.recordOutput("AutoShoot/OkStayShoot", ok);
+    return ok;
   }
 
   private static double slopeAtDistance(
@@ -369,7 +313,7 @@ public class MegaTrackCommand extends Command {
     // rDot: by default only use velocity term (accel term can be jumpy)
     double rdotX = -vField.vxMetersPerSecond;
     double rdotY = -vField.vyMetersPerSecond;
-    if (USE_ACCEL_IN_FF) {
+    if (Constants.MegaTrackCommandConstants.USE_ACCEL_IN_FF) {
       // When r = g - p - T*v, then rDot = -(v + T*a)
       rdotX = -(vField.vxMetersPerSecond + T * aField.getX());
       rdotY = -(vField.vyMetersPerSecond + T * aField.getY());
@@ -398,7 +342,7 @@ public class MegaTrackCommand extends Command {
     // rDot = -(v + T*a) (optionally ignore accel term if jumpy)
     double rdotx = -vx;
     double rdoty = -vy;
-    if (USE_ACCEL_IN_FF) {
+    if (Constants.MegaTrackCommandConstants.USE_ACCEL_IN_FF) {
       rdotx = -(vx + T * ax);
       rdoty = -(vy + T * ay);
     }
@@ -422,9 +366,8 @@ public class MegaTrackCommand extends Command {
   public void execute() {
     Logger.recordOutput("AutoShoot/State", state.toString());
     switch (state) {
-      case ALIGNING -> aligning();
+      case ALIGN -> align();
       case SHOOT -> shoot();
-      case REACCELERATE -> reaccelerate();
     }
   }
 

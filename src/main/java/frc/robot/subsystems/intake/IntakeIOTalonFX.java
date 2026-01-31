@@ -31,13 +31,13 @@ public class IntakeIOTalonFX implements IntakeIO {
   private final StatusSignal<Current> followerCurrent;
 
   public IntakeIOTalonFX() {
-    leader = new TalonFX(Constants.intakeConstants.LEADER_MOTOR_ID);
-    follower = new TalonFX(Constants.intakeConstants.FOLLOWER_MOTOR_ID);
+    leader = new TalonFX(Constants.IntakeConstants.LEADER_MOTOR_ID);
+    follower = new TalonFX(Constants.IntakeConstants.FOLLOWER_MOTOR_ID);
 
     var leaderCfg = new TalonFXConfiguration();
     leaderCfg.MotorOutput.NeutralMode = NeutralModeValue.Coast;
     leaderCfg.MotorOutput.Inverted =
-        Constants.intakeConstants.LEADER_INVERTED
+        Constants.IntakeConstants.LEADER_INVERTED
             ? InvertedValue.Clockwise_Positive
             : InvertedValue.CounterClockwise_Positive;
     leader.getConfigurator().apply(leaderCfg);
@@ -45,7 +45,7 @@ public class IntakeIOTalonFX implements IntakeIO {
     var followerCfg = new TalonFXConfiguration();
     followerCfg.MotorOutput.NeutralMode = NeutralModeValue.Coast;
     followerCfg.MotorOutput.Inverted =
-        Constants.intakeConstants.FOLLOWER_INVERTED
+        Constants.IntakeConstants.FOLLOWER_INVERTED
             ? InvertedValue.Clockwise_Positive
             : InvertedValue.CounterClockwise_Positive;
     follower.getConfigurator().apply(followerCfg);

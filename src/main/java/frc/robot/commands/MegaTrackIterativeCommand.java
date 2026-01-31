@@ -28,28 +28,10 @@ import org.littletonrobotics.junction.Logger;
  * using fixed-point iteration each cycle, then uses r(T*) for heading/distance.
  */
 public class MegaTrackIterativeCommand extends Command {
-  private static final String LOG_PREFIX = "AutoShootIter";
-
-  // Heading control
-  private static final double HEADING_KP = 6.0;
-  private static final double HEADING_KI = 0.0;
-  private static final double HEADING_KD = 0.1;
-
-  // Fixed-point iteration tuning
-  private static final int MAX_ITERS = 6;
-  private static final double EPS_T_SEC = 1e-3;
-  private static final double RELAX = 0.7; // 1.0 = plain fixed-point, <1 adds damping
-  private static final double MIN_T_SEC = 0.0;
-  private static final double MAX_T_SEC = 2.0;
-
-  // Shoot gating
-  private static final double MIN_SHOOT_DIST_METERS = 0.8;
-  private static final double MAX_SHOOT_DIST_METERS = 5.8;
-  private static final double HEADING_TOL_RAD = Math.toRadians(2.0);
-  private static final double FLYWHEEL_RPS_TOL = 1.5;
-  private static final double HOOD_DEG_TOL = 1.0;
-  private static final double FEEDER_RPS = 20.0;
-  private static final double INDEXER_VOLTS = 10.0;
+  private enum State {
+    ALIGN,
+    SHOOT
+  }
 
   private final RobotContainer robot;
   private final frc.robot.subsystems.drive.Drive drive;
@@ -58,10 +40,28 @@ public class MegaTrackIterativeCommand extends Command {
   private final java.util.function.DoubleSupplier ySupplier;
 
   private final PIDController headingController =
-      new PIDController(HEADING_KP, HEADING_KI, HEADING_KD);
+      new PIDController(
+          Constants.MegaTrackIterativeCommandConstants.HEADING_KP,
+          Constants.MegaTrackIterativeCommandConstants.HEADING_KI,
+          Constants.MegaTrackIterativeCommandConstants.HEADING_KD);
 
   private double lastFlightTimeSec = AutoShootConstants.FlyTime;
   private Rotation2d heldHeading = new Rotation2d();
+  private State state = State.ALIGN;
+
+  // Per-cycle values (kept as fields to avoid long argument lists)
+  private Translation2d shotOrigin = new Translation2d();
+  private ChassisSpeeds vField = new ChassisSpeeds();
+  private double tSec = AutoShootConstants.FlyTime;
+  private Translation2d r = new Translation2d();
+  private double dist = 0.0;
+  private double shooterRps = 0.0;
+  private double hoodDeg = 0.0;
+  private boolean distOk = false;
+  private boolean triggerHeld = false;
+  private double flywheelErrRps = 0.0;
+  private double hoodErrDeg = 0.0;
+  private double headingErrRad = 0.0;
 
   public MegaTrackIterativeCommand(RobotContainer robot, Translation2d targetTranslation) {
     this.robot = robot;
@@ -77,8 +77,8 @@ public class MegaTrackIterativeCommand extends Command {
     Pose2d pose = drive.getPose();
     Translation2d offsetRobot =
         new Translation2d(
-            Constants.shooterConstants.FLYWHEEL_OFFSET_X_METERS,
-            Constants.shooterConstants.FLYWHEEL_OFFSET_Y_METERS);
+            Constants.ShooterConstants.FLYWHEEL_OFFSET_X_METERS,
+            Constants.ShooterConstants.FLYWHEEL_OFFSET_Y_METERS);
     Translation2d offsetField = offsetRobot.rotateBy(pose.getRotation());
     return pose.getTranslation().plus(offsetField);
   }
@@ -92,7 +92,11 @@ public class MegaTrackIterativeCommand extends Command {
   }
 
   private double iterateFlightTimeSec(Translation2d shotOrigin, ChassisSpeeds vField) {
-    double t = MathUtil.clamp(lastFlightTimeSec, MIN_T_SEC, MAX_T_SEC);
+    double t =
+        MathUtil.clamp(
+            lastFlightTimeSec,
+            Constants.MegaTrackIterativeCommandConstants.MIN_T_SEC,
+            Constants.MegaTrackIterativeCommandConstants.MAX_T_SEC);
 
     // If last T is invalid/uninitialized, seed with map(distance at T=0)
     if (!Double.isFinite(t)) {
@@ -100,18 +104,26 @@ public class MegaTrackIterativeCommand extends Command {
       t = AutoShootConstants.flightTimeMap.get(d0);
     }
 
-    for (int i = 0; i < MAX_ITERS; i++) {
+    for (int i = 0; i < Constants.MegaTrackIterativeCommandConstants.MAX_ITERS; i++) {
       Translation2d r = compensatedVector(shotOrigin, vField, t);
       double d = r.getNorm();
       double tNext = AutoShootConstants.flightTimeMap.get(d);
-      tNext = MathUtil.clamp(tNext, MIN_T_SEC, MAX_T_SEC);
+      tNext =
+          MathUtil.clamp(
+              tNext,
+              Constants.MegaTrackIterativeCommandConstants.MIN_T_SEC,
+              Constants.MegaTrackIterativeCommandConstants.MAX_T_SEC);
 
-      double tNew = (1.0 - RELAX) * t + RELAX * tNext;
-      Logger.recordOutput(LOG_PREFIX + "/Iter/T_" + i, t);
-      Logger.recordOutput(LOG_PREFIX + "/Iter/D_" + i, d);
-      Logger.recordOutput(LOG_PREFIX + "/Iter/TNext_" + i, tNext);
+      double relax = Constants.MegaTrackIterativeCommandConstants.RELAX;
+      double tNew = (1.0 - relax) * t + relax * tNext;
+      Logger.recordOutput(
+          Constants.MegaTrackIterativeCommandConstants.LOG_PREFIX + "/Iter/T_" + i, t);
+      Logger.recordOutput(
+          Constants.MegaTrackIterativeCommandConstants.LOG_PREFIX + "/Iter/D_" + i, d);
+      Logger.recordOutput(
+          Constants.MegaTrackIterativeCommandConstants.LOG_PREFIX + "/Iter/TNext_" + i, tNext);
 
-      if (Math.abs(tNew - t) < EPS_T_SEC) {
+      if (Math.abs(tNew - t) < Constants.MegaTrackIterativeCommandConstants.EPS_T_SEC) {
         t = tNew;
         break;
       }
@@ -126,16 +138,26 @@ public class MegaTrackIterativeCommand extends Command {
   public void initialize() {
     headingController.reset();
     heldHeading = drive.getRotation();
+    state = State.ALIGN;
   }
 
-  @Override
-  public void execute() {
-    Translation2d shotOrigin = getShotOriginField();
-    ChassisSpeeds vField = drive.getFieldRelativeSpeeds();
+  private void stopFeed() {
+    robot.feeder.stop();
+    robot.indexer.stop();
+  }
 
-    double tSec = iterateFlightTimeSec(shotOrigin, vField);
-    Translation2d r = compensatedVector(shotOrigin, vField, tSec);
-    double dist = r.getNorm();
+  private void runFeed() {
+    robot.feeder.setVelocity(Constants.MegaTrackIterativeCommandConstants.FEEDER_RPS);
+    robot.indexer.setVoltage(Constants.MegaTrackIterativeCommandConstants.INDEXER_VOLTS);
+  }
+
+  private void traceTarget() {
+    shotOrigin = getShotOriginField();
+    vField = drive.getFieldRelativeSpeeds();
+
+    tSec = iterateFlightTimeSec(shotOrigin, vField);
+    r = compensatedVector(shotOrigin, vField, tSec);
+    dist = r.getNorm();
 
     // Heading target comes from compensated vector (if too close, just hold current).
     if (dist > 1e-3) {
@@ -150,13 +172,14 @@ public class MegaTrackIterativeCommand extends Command {
     // Heading control + simple omega FF using rDot=-v
     double omegaPid =
         headingController.calculate(drive.getRotation().getRadians(), heldHeading.getRadians());
-    double den = Math.max(r.getNorm() * r.getNorm(), 0.40 * 0.40);
+    double den = Math.max(dist * dist, 0.40 * 0.40);
     double omegaFf =
         (r.getX() * (-vField.vyMetersPerSecond) - r.getY() * (-vField.vxMetersPerSecond)) / den;
-    double omega = omegaPid + omegaFf;
-    omega =
+    double omega =
         MathUtil.clamp(
-            omega, -drive.getMaxAngularSpeedRadPerSec(), drive.getMaxAngularSpeedRadPerSec());
+            omegaPid + omegaFf,
+            -drive.getMaxAngularSpeedRadPerSec(),
+            drive.getMaxAngularSpeedRadPerSec());
 
     ChassisSpeeds fieldRelative =
         new ChassisSpeeds(
@@ -173,44 +196,91 @@ public class MegaTrackIterativeCommand extends Command {
             isFlipped ? drive.getRotation().plus(new Rotation2d(Math.PI)) : drive.getRotation()));
 
     // Shooter setpoints based on compensated distance
-    double shooterRps = AutoShootConstants.shooterSpeedMap.get(dist);
-    double hoodDeg = AutoShootConstants.hoodAngleMap.get(dist);
+    shooterRps = AutoShootConstants.shooterSpeedMap.get(dist);
+    hoodDeg = AutoShootConstants.hoodAngleMap.get(dist);
     robot.shooter.setVelocity(shooterRps);
     robot.shooter.setHoodAngle(hoodDeg);
 
-    // Shoot gating (same idea as MegaTrackCommand)
-    boolean distOk = dist >= MIN_SHOOT_DIST_METERS && dist <= MAX_SHOOT_DIST_METERS;
-    double flywheelErr = shooterRps - robot.shooter.getFlywheelVelocityRps();
-    double hoodErr = hoodDeg - robot.shooter.getHoodAngleDeg();
-    double headingErrRad =
+    // Gating values
+    distOk =
+        dist >= Constants.MegaTrackIterativeCommandConstants.MIN_SHOOT_DIST_METERS
+            && dist <= Constants.MegaTrackIterativeCommandConstants.MAX_SHOOT_DIST_METERS;
+    triggerHeld =
+        robot.getRightTriggerAxisSupplier().getAsDouble()
+            > Constants.MegaTrackIterativeCommandConstants.TRIGGER_AXIS_THRESHOLD;
+    flywheelErrRps = shooterRps - robot.shooter.getFlywheelVelocityRps();
+    hoodErrDeg = hoodDeg - robot.shooter.getHoodAngleDeg();
+    headingErrRad =
         MathUtil.angleModulus(heldHeading.getRadians() - drive.getRotation().getRadians());
 
-    boolean ready =
-        distOk
-            && Math.abs(flywheelErr) <= FLYWHEEL_RPS_TOL
-            && Math.abs(hoodErr) <= HOOD_DEG_TOL
-            && Math.abs(headingErrRad) <= HEADING_TOL_RAD;
-
-    if (ready) {
-      robot.feeder.setVelocity(FEEDER_RPS);
-      robot.indexer.setVoltage(INDEXER_VOLTS);
-    } else {
-      robot.feeder.stop();
-      robot.indexer.stop();
-    }
-
     // Logs
-    Logger.recordOutput(LOG_PREFIX + "/ShotOrigin", shotOrigin);
-    Logger.recordOutput(LOG_PREFIX + "/T", tSec);
-    Logger.recordOutput(LOG_PREFIX + "/R", r);
-    Logger.recordOutput(LOG_PREFIX + "/Dist", dist);
-    Logger.recordOutput(LOG_PREFIX + "/HeldHeadingDeg", heldHeading.getDegrees());
-    Logger.recordOutput(LOG_PREFIX + "/OmegaPID", omegaPid);
-    Logger.recordOutput(LOG_PREFIX + "/OmegaFF", omegaFf);
-    Logger.recordOutput(LOG_PREFIX + "/Ready", ready);
-    Logger.recordOutput(LOG_PREFIX + "/FlywheelErrRps", flywheelErr);
-    Logger.recordOutput(LOG_PREFIX + "/HoodErrDeg", hoodErr);
-    Logger.recordOutput(LOG_PREFIX + "/HeadingErrDeg", Math.toDegrees(headingErrRad));
+    String lp = Constants.MegaTrackIterativeCommandConstants.LOG_PREFIX;
+    Logger.recordOutput(lp + "/State", state.toString());
+    Logger.recordOutput(lp + "/ShotOrigin", shotOrigin);
+    Logger.recordOutput(lp + "/T", tSec);
+    Logger.recordOutput(lp + "/TargetPosition", r.plus(shotOrigin));
+    Logger.recordOutput(lp + "/Dist", dist);
+    Logger.recordOutput(lp + "/HeldHeadingDeg", heldHeading.getDegrees());
+    Logger.recordOutput(lp + "/TriggerHeld", triggerHeld);
+    Logger.recordOutput(lp + "/FlywheelErrRps", flywheelErrRps);
+    Logger.recordOutput(lp + "/HoodErrDeg", hoodErrDeg);
+    Logger.recordOutput(lp + "/HeadingErrDeg", Math.toDegrees(headingErrRad));
+  }
+
+  private boolean okToEnterShoot() {
+    boolean ok =
+        distOk
+            && triggerHeld
+            && Math.abs(flywheelErrRps)
+                <= Constants.MegaTrackIterativeCommandConstants.ENTER_FLYWHEEL_RPS_TOL
+            && Math.abs(hoodErrDeg)
+                <= Constants.MegaTrackIterativeCommandConstants.ENTER_HOOD_DEG_TOL
+            && Math.abs(headingErrRad)
+                <= Constants.MegaTrackIterativeCommandConstants.ENTER_HEADING_TOL_RAD;
+    Logger.recordOutput(
+        Constants.MegaTrackIterativeCommandConstants.LOG_PREFIX + "/OkEnterShoot", ok);
+    return ok;
+  }
+
+  private boolean okToStayShoot() {
+    boolean ok =
+        distOk
+            && triggerHeld
+            && Math.abs(flywheelErrRps)
+                <= Constants.MegaTrackIterativeCommandConstants.EXIT_FLYWHEEL_RPS_TOL
+            && Math.abs(hoodErrDeg)
+                <= Constants.MegaTrackIterativeCommandConstants.EXIT_HOOD_DEG_TOL
+            && Math.abs(headingErrRad)
+                <= Constants.MegaTrackIterativeCommandConstants.EXIT_HEADING_TOL_RAD;
+    Logger.recordOutput(
+        Constants.MegaTrackIterativeCommandConstants.LOG_PREFIX + "/OkStayShoot", ok);
+    return ok;
+  }
+
+  private void align() {
+    traceTarget();
+    stopFeed();
+    if (okToEnterShoot()) {
+      state = State.SHOOT;
+    }
+  }
+
+  private void shoot() {
+    traceTarget();
+    if (!okToStayShoot()) {
+      stopFeed();
+      state = State.ALIGN;
+      return;
+    }
+    runFeed();
+  }
+
+  @Override
+  public void execute() {
+    switch (state) {
+      case ALIGN -> align();
+      case SHOOT -> shoot();
+    }
   }
 
   @Override

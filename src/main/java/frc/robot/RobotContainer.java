@@ -26,9 +26,10 @@ import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.wpilibj2.command.InstantCommand;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
-import frc.robot.Constants.fieldConstants;
+import frc.robot.Constants.FieldConstants;
 import frc.robot.commands.DriveCommands;
-import frc.robot.commands.MegaTrackCommand;
+import frc.robot.commands.MegaTrackIterativeCommand;
+import frc.robot.commands.SmashBumpCommand;
 import frc.robot.commands.TestShootCommand;
 import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.drive.Drive;
@@ -52,6 +53,7 @@ import frc.robot.subsystems.shooter.ShooterIOTalonFX;
 import frc.robot.util.LoggedTunableNumber;
 import java.util.Set;
 import java.util.function.DoubleSupplier;
+import org.littletonrobotics.junction.Logger;
 import org.littletonrobotics.junction.networktables.LoggedDashboardChooser;
 
 /**
@@ -203,6 +205,9 @@ public class RobotContainer {
                 },
                 drive));
 
+    // Debug: log nearest trench pre-align pose
+    controller.rightStick().whileTrue(new SmashBumpCommand(this));
+
     // Lock to 0° when A button is held
     controller.a().whileTrue(new InstantCommand(() -> shooter.setVelocity(Shooter.get())));
     controller.x().whileTrue(new InstantCommand(() -> shooter.setHoodAngle(hoodAngle.get())));
@@ -211,6 +216,14 @@ public class RobotContainer {
     controller.x().onTrue(Commands.runOnce(drive::stopWithX, drive));
     controller.leftBumper().onTrue(new InstantCommand(() -> intake.setVoltage(10)));
     controller.leftBumper().onFalse(new InstantCommand(() -> intake.setVoltage(0)));
+    controller
+        .povDown()
+        .onTrue(
+            new InstantCommand(
+                () -> {
+                  Logger.recordOutput(
+                      "Bump/AlignPose", FieldConstants.getNearestTrenchPrePose(drive.getPose()));
+                }));
 
     // Reset gyro to 0° when B button is pressed
     controller
@@ -225,7 +238,8 @@ public class RobotContainer {
 
     controller
         .rightBumper()
-        .whileTrue(new MegaTrackCommand(this, fieldConstants.getHubLocation(Alliance.Blue)));
+        .whileTrue(
+            new MegaTrackIterativeCommand(this, FieldConstants.getHubLocation(Alliance.Blue)));
 
     // Hold Y to spin up shooter + aim hood, and press right trigger to run feeder
     controller

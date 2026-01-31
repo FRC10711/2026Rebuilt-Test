@@ -31,39 +31,39 @@ public class FeederIOTalonFX implements FeederIO {
   private final StatusSignal<Current> current;
 
   public FeederIOTalonFX() {
-    motor = new TalonFX(Constants.feederConstants.MOTOR_ID);
-    followerMotor = new TalonFX(Constants.feederConstants.FOLLOWER_MOTOR_ID);
+    motor = new TalonFX(Constants.FeederConstants.MOTOR_ID);
+    followerMotor = new TalonFX(Constants.FeederConstants.FOLLOWER_MOTOR_ID);
 
     var cfg = new TalonFXConfiguration();
     cfg.MotorOutput.NeutralMode = NeutralModeValue.Coast;
     cfg.MotorOutput.Inverted =
-        Constants.feederConstants.INVERTED
+        Constants.FeederConstants.INVERTED
             ? InvertedValue.Clockwise_Positive
             : InvertedValue.CounterClockwise_Positive;
-    cfg.Feedback.SensorToMechanismRatio = Constants.feederConstants.SENSOR_TO_MECH_RATIO;
+    cfg.Feedback.SensorToMechanismRatio = Constants.FeederConstants.SENSOR_TO_MECH_RATIO;
     cfg.Slot0 =
         new Slot0Configs()
-            .withKP(Constants.feederConstants.KP)
-            .withKI(Constants.feederConstants.KI)
-            .withKD(Constants.feederConstants.KD)
-            .withKV(Constants.feederConstants.KV)
-            .withKS(Constants.feederConstants.KS);
+            .withKP(Constants.FeederConstants.KP)
+            .withKI(Constants.FeederConstants.KI)
+            .withKD(Constants.FeederConstants.KD)
+            .withKV(Constants.FeederConstants.KV)
+            .withKS(Constants.FeederConstants.KS);
     // Optional: keep reverse torque at 0 so the feeder doesn't "suck back" when commanded near
     // zero.
     cfg.TorqueCurrent.PeakReverseTorqueCurrent = 0.0;
-    cfg.CurrentLimits.SupplyCurrentLimitEnable = false;
-    cfg.CurrentLimits.StatorCurrentLimitEnable = false;
+    cfg.CurrentLimits.SupplyCurrentLimitEnable = true;
+    cfg.CurrentLimits.StatorCurrentLimitEnable = true;
     motor.getConfigurator().apply(cfg);
 
     var followerCfg = new TalonFXConfiguration();
     followerCfg.MotorOutput.NeutralMode = NeutralModeValue.Coast;
-    followerCfg.Feedback.SensorToMechanismRatio = Constants.feederConstants.SENSOR_TO_MECH_RATIO;
+    followerCfg.Feedback.SensorToMechanismRatio = Constants.FeederConstants.SENSOR_TO_MECH_RATIO;
     followerCfg.Slot0 = cfg.Slot0;
     followerCfg.CurrentLimits.SupplyCurrentLimitEnable = false;
     followerCfg.CurrentLimits.StatorCurrentLimitEnable = false;
     followerMotor.getConfigurator().apply(followerCfg);
 
-    followerReq = new Follower(motor.getDeviceID(), Constants.feederConstants.FOLLOWER_ALIGNMENT);
+    followerReq = new Follower(motor.getDeviceID(), Constants.FeederConstants.FOLLOWER_ALIGNMENT);
     followerMotor.setControl(followerReq);
 
     velocity = motor.getVelocity();

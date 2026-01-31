@@ -27,7 +27,7 @@ public class Shooter extends SubsystemBase {
     Logger.recordOutput("Shooter/HoodVelSetpointDegPerSec", hoodVelSetpointDegPerSec);
   }
 
-  /** Sets shooter flywheel velocity (RPM). */
+  /** Sets shooter flywheel velocity (RPS */
   public void setVelocity(double rps) {
 
     flywheelSetpointRPS = rps;

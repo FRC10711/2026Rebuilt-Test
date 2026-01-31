@@ -26,9 +26,11 @@ import com.pathplanner.lib.util.PathPlannerLogging;
 import edu.wpi.first.hal.FRCNetComm.tInstances;
 import edu.wpi.first.hal.FRCNetComm.tResourceType;
 import edu.wpi.first.hal.HAL;
+import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.estimator.SwerveDrivePoseEstimator;
+import edu.wpi.first.math.filter.Debouncer;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
@@ -111,11 +113,20 @@ public class Drive extends SubsystemBase {
 
   static final Lock odometryLock = new ReentrantLock();
   private final GyroIO gyroIO;
-  private final GyroIOInputsAutoLogged gyroInputs = new GyroIOInputsAutoLogged();
+  private final GyroIO.GyroIOInputs gyroInputs = new GyroIO.GyroIOInputs();
   private final Module[] modules = new Module[4]; // FL, FR, BL, BR
   private final SysIdRoutine sysId;
   private final Alert gyroDisconnectedAlert =
       new Alert("Disconnected gyro, using kinematics as fallback.", AlertType.kError);
+
+  // --- Tilt detection (pitch/roll) ---
+  private final Debouncer tiltTripDebouncer =
+      new Debouncer(
+          Constants.DrivetrainConstants.TILT_TRIP_DEBOUNCE_SEC, Debouncer.DebounceType.kRising);
+  private final Debouncer tiltClearDebouncer =
+      new Debouncer(
+          Constants.DrivetrainConstants.TILT_CLEAR_DEBOUNCE_SEC, Debouncer.DebounceType.kRising);
+  private boolean isTilted = false;
 
   private SwerveDriveKinematics kinematics = new SwerveDriveKinematics(getModuleTranslations());
   private Rotation2d rawGyroRotation = new Rotation2d();
@@ -244,7 +255,7 @@ public class Drive extends SubsystemBase {
     // Translation std dev based on TA -> dev interpolation.
     double ta = LimelightHelpers.getTA(llName);
     double xyStdDev =
-        Math.max(0.05, Constants.visionConstants.taToXYStdDevMeters.get(Math.max(0.0, ta)));
+        Math.max(0.05, Constants.VisionConstants.taToXYStdDevMeters.get(Math.max(0.0, ta)));
 
     // Heading should not be corrected: force rotation to current heading and give huge theta std
     // dev.
@@ -253,7 +264,7 @@ public class Drive extends SubsystemBase {
     addVisionMeasurement(
         visionPoseNoHeading,
         est.timestampSeconds,
-        VecBuilder.fill(xyStdDev, xyStdDev, Constants.visionConstants.thetaStdDevRad));
+        VecBuilder.fill(xyStdDev, xyStdDev, Constants.VisionConstants.thetaStdDevRad));
 
     Logger.recordOutput("Vision/Limelight/TA", ta);
     Logger.recordOutput("Vision/Limelight/XYStdDev", xyStdDev);
@@ -336,6 +347,60 @@ public class Drive extends SubsystemBase {
 
     // Update gyro alert
     gyroDisconnectedAlert.set(!gyroInputs.connected && Constants.currentMode != Mode.SIM);
+
+    // Tilt detection (uses pitch/roll)
+    updateTiltDetection();
+  }
+
+  private void updateTiltDetection() {
+    double pitchRad = gyroInputs.pitchPosition.getRadians();
+    double rollRad = gyroInputs.rollPosition.getRadians();
+
+    // Absolute tilt angle from combining pitch+roll.
+    // Model: the "up" direction after pitch+roll has z component cos(pitch)*cos(roll),
+    // so tilt = acos(zUp). This behaves like sqrt(p^2+r^2) for small angles.
+    double zUp = Math.cos(pitchRad) * Math.cos(rollRad);
+    zUp = MathUtil.clamp(zUp, -1.0, 1.0);
+    double tiltRad = Math.acos(zUp);
+    double tiltDeg = Math.toDegrees(tiltRad);
+
+    if (!isTilted) {
+      if (tiltTripDebouncer.calculate(tiltDeg >= Constants.DrivetrainConstants.TILT_TRIP_DEG)) {
+        isTilted = true;
+        tiltClearDebouncer.calculate(false);
+      }
+    } else {
+      if (tiltClearDebouncer.calculate(tiltDeg <= Constants.DrivetrainConstants.TILT_CLEAR_DEG)) {
+        isTilted = false;
+        tiltTripDebouncer.calculate(false);
+      }
+    }
+
+    Logger.recordOutput("Drive/Tilt/PitchDeg", Math.toDegrees(pitchRad));
+    Logger.recordOutput("Drive/Tilt/RollDeg", Math.toDegrees(rollRad));
+    Logger.recordOutput("Drive/Tilt/AbsTiltDeg", tiltDeg);
+    Logger.recordOutput("Drive/Tilt/IsTilted", isTilted);
+  }
+
+  public Rotation2d getPitch() {
+    return gyroInputs.pitchPosition;
+  }
+
+  public Rotation2d getRoll() {
+    return gyroInputs.rollPosition;
+  }
+
+  /** Returns absolute tilt angle (deg) from pitch+roll. */
+  public double getTiltMagnitudeDeg() {
+    double pitchRad = getPitch().getRadians();
+    double rollRad = getRoll().getRadians();
+    double zUp = Math.cos(pitchRad) * Math.cos(rollRad);
+    zUp = MathUtil.clamp(zUp, -1.0, 1.0);
+    return Math.toDegrees(Math.acos(zUp));
+  }
+
+  public boolean isTilted() {
+    return isTilted;
   }
 
   /**

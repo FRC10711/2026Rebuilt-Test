@@ -119,12 +119,13 @@ public class ModuleIOTalonFX implements ModuleIO {
     driveConfig.TorqueCurrent.PeakReverseTorqueCurrent = -constants.SlipCurrent;
     driveConfig.CurrentLimits.StatorCurrentLimit = constants.SlipCurrent;
     driveConfig.CurrentLimits.StatorCurrentLimitEnable = true;
+
     // driveConfig.TorqueCurrent.PeakReverseTorqueCurrent = 0;
     // Apply torque-current deadband at the motor-controller level (affects TorqueCurrentFOC output,
     // including VelocityTorqueCurrentFOC / PositionTorqueCurrentFOC closed-loop output).
     // Units: amps
     driveConfig.TorqueCurrent.TorqueNeutralDeadband =
-        Constants.drivetrainConstants.TORQUE_CURRENT_DEADBAND_AMPS;
+        Constants.DrivetrainConstants.TORQUE_CURRENT_DEADBAND_AMPS;
     driveConfig.MotorOutput.Inverted =
         constants.DriveMotorInverted
             ? InvertedValue.Clockwise_Positive
